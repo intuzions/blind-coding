@@ -1,0 +1,76 @@
+.render-component-wrapper {
+  position: relative;
+  display: inline-block;
+  min-width: 50px;
+  min-height: 30px;
+  /* Allow components to overlap */
+  z-index: auto;
+}
+
+/* Ensure block-level elements expand properly when height is set */
+.render-component-wrapper > div,
+.render-component-wrapper > p,
+.render-component-wrapper > section,
+.render-component-wrapper > article,
+.render-component-wrapper > aside,
+.render-component-wrapper > header,
+.render-component-wrapper > footer,
+.render-component-wrapper > nav,
+.render-component-wrapper > main,
+.render-component-wrapper > form,
+.render-component-wrapper > ul,
+.render-component-wrapper > ol {
+  position: relative;
+  /* Ensure element expands to set height */
+  box-sizing: border-box;
+}
+
+.render-component-wrapper.selected-wrapper {
+  /* Selection outline removed */
+}
+
+.component-placeholder {
+  min-height: 40px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+  font-size: 0.85rem;
+  border: 2px dashed #ddd;
+  border-radius: 4px;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+
+.component-controls {
+  position: absolute;
+  top: -30px;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  gap: 0.25rem;
+}
+
+.delete-control {
+  background: #e74c3c;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  font-size: 0.85rem;
+  transition: background 0.2s;
+}
+
+.delete-control:hover {
+  background: #c0392b;
+}
+
+/* Selected component styling */
+.selected {
+  /* Selection outline removed */
+}
+
