@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../hooks/redux'
-import { fetchProjects, createProject, deleteProject } from '../store/slices/projectSlice'
-import { logout } from '../store/slices/authSlice'
-import { FiPlus, FiTrash2, FiEdit, FiLogOut } from 'react-icons/fi'
+import { fetchProjects, deleteProject } from '../store/slices/projectSlice'
+import { FiTrash2, FiEdit, FiSettings, FiGlobe, FiUser } from 'react-icons/fi'
+import { useConfirmation } from '../components/ConfirmationModal'
+import { useToast } from '../components/Toast'
 import './Dashboard.css'
 
 const Dashboard = () => {
@@ -11,60 +12,57 @@ const Dashboard = () => {
   const navigate = useNavigate()
   const { projects, loading } = useAppSelector((state) => state.projects)
   const { user } = useAppSelector((state) => state.auth)
-  const [showCreateModal, setShowCreateModal] = useState(false)
-  const [projectName, setProjectName] = useState('')
-  const [projectDescription, setProjectDescription] = useState('')
+  const { confirm } = useConfirmation()
+  const { showToast } = useToast()
 
   useEffect(() => {
     dispatch(fetchProjects())
   }, [dispatch])
 
-  const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault()
-    try {
-      const result = await dispatch(
-        createProject({ name: projectName, description: projectDescription })
-      ).unwrap()
-      setShowCreateModal(false)
-      setProjectName('')
-      setProjectDescription('')
-      navigate(`/editor/${result.id}`)
-    } catch (err) {
-      console.error('Failed to create project:', err)
-    }
-  }
-
   const handleDeleteProject = async (id: number) => {
-    if (window.confirm('Are you sure you want to delete this project?')) {
-      await dispatch(deleteProject(id))
-    }
+    confirm({
+      title: 'Delete Project',
+      message: 'Are you sure you want to delete this project? This action cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      confirmButtonStyle: 'danger',
+      onConfirm: async () => {
+        try {
+          await dispatch(deleteProject(id)).unwrap()
+          showToast('Project deleted successfully', 'success')
+        } catch (error) {
+          showToast('Failed to delete project', 'error')
+        }
+      },
+    })
   }
 
-  const handleLogout = () => {
-    dispatch(logout())
-    navigate('/login')
+  const handleSettings = (e: React.MouseEvent, projectId: number) => {
+    e.stopPropagation()
+    // TODO: Open settings modal or navigate to settings page
+    console.log('Settings for project:', projectId)
+    // For now, you can navigate to a settings page or open a modal
+    // navigate(`/project/${projectId}/settings`)
+  }
+
+  const handlePublish = (e: React.MouseEvent, projectId: number) => {
+    e.stopPropagation()
+    // TODO: Implement publish functionality
+    console.log('Publish project:', projectId)
+    // This could open a publish modal, generate a public URL, etc.
+    // Toast will be shown if needed
+  }
+
+  const getDisplayName = () => {
+    if (user?.first_name || user?.last_name) {
+      return `${user.first_name || ''} ${user.last_name || ''}`.trim()
+    }
+    return user?.username || 'Unknown User'
   }
 
   return (
     <div className="dashboard">
-      <header className="dashboard-header">
-        <h1>My Projects</h1>
-        <div className="header-actions">
-          <span className="user-email">{user?.email}</span>
-          <button onClick={handleLogout} className="logout-btn">
-            <FiLogOut /> Logout
-          </button>
-        </div>
-      </header>
-
       <div className="dashboard-content">
-        <button
-          className="create-project-btn"
-          onClick={() => setShowCreateModal(true)}
-        >
-          <FiPlus /> Create New Project
-        </button>
-
         {loading ? (
           <div className="loading">Loading projects...</div>
         ) : projects.length === 0 ? (
@@ -74,15 +72,33 @@ const Dashboard = () => {
         ) : (
           <div className="projects-grid">
             {projects.map((project) => (
-              <div key={project.id} className="project-card">
-                <h3>{project.name}</h3>
+              <div 
+                key={project.id} 
+                className="project-card"
+                onClick={() => navigate(`/editor/${project.id}`)}
+              >
+                <div className="project-card-header">
+                  <h3>{project.name}</h3>
+                </div>
                 {project.description && <p>{project.description}</p>}
-                <div className="project-actions">
+                <div className="project-actions" onClick={(e) => e.stopPropagation()}>
                   <button
                     onClick={() => navigate(`/editor/${project.id}`)}
                     className="edit-btn"
                   >
                     <FiEdit /> Edit
+                  </button>
+                  <button
+                    onClick={(e) => handleSettings(e, project.id)}
+                    className="settings-btn"
+                  >
+                    <FiSettings /> Settings
+                  </button>
+                  <button
+                    onClick={(e) => handlePublish(e, project.id)}
+                    className="publish-btn"
+                  >
+                    <FiGlobe /> Publish
                   </button>
                   <button
                     onClick={() => handleDeleteProject(project.id)}
@@ -92,49 +108,21 @@ const Dashboard = () => {
                   </button>
                 </div>
                 <div className="project-meta">
-                  <small>
-                    Created: {new Date(project.created_at).toLocaleDateString()}
-                  </small>
+                  <div className="project-meta-item">
+                    <FiUser className="meta-icon" />
+                    <small>Created by: {getDisplayName()}</small>
+                  </div>
+                  <div className="project-meta-item">
+                    <small>
+                      📅 {new Date(project.created_at).toLocaleDateString()}
+                    </small>
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         )}
       </div>
-
-      {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h2>Create New Project</h2>
-            <form onSubmit={handleCreateProject}>
-              <div className="form-group">
-                <label>Project Name</label>
-                <input
-                  type="text"
-                  value={projectName}
-                  onChange={(e) => setProjectName(e.target.value)}
-                  required
-                  autoFocus
-                />
-              </div>
-              <div className="form-group">
-                <label>Description (optional)</label>
-                <textarea
-                  value={projectDescription}
-                  onChange={(e) => setProjectDescription(e.target.value)}
-                  rows={3}
-                />
-              </div>
-              <div className="modal-actions">
-                <button type="button" onClick={() => setShowCreateModal(false)}>
-                  Cancel
-                </button>
-                <button type="submit">Create</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

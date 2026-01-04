@@ -1650,6 +1650,11 @@ react-dom@^18.2.0:
     loose-envify "^1.1.0"
     scheduler "^0.23.2"
 
+react-google-charts@^4.0.0:
+  version "4.0.7"
+  resolved "https://registry.yarnpkg.com/react-google-charts/-/react-google-charts-4.0.7.tgz#b6a6919a1034919927ef33bd7af268deb5592adc"
+  integrity sha512-u1HHEaFvjYrO4r5tnVic7Zl+p7rZKqq6ukLY7E4qdIREN7MPiBBMVRmfUpuWHCQw5aFLRoK+EAHi0c7ub8CW3A==
+
 react-icons@^4.12.0:
   version "4.12.0"
   resolved "https://registry.yarnpkg.com/react-icons/-/react-icons-4.12.0.tgz#54806159a966961bfd5cdb26e492f4dafd6a8d78"

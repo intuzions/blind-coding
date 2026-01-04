@@ -1,32 +1,224 @@
 .render-component-wrapper {
-  position: relative;
+  /* Use inline-block but allow component's display to override via style */
   display: inline-block;
   min-width: 50px;
   min-height: 30px;
   /* Allow components to overlap */
   z-index: auto;
+  /* Don't force position - let component styles control it */
+  vertical-align: top;
 }
 
-/* Ensure block-level elements expand properly when height is set */
-.render-component-wrapper > div,
-.render-component-wrapper > p,
-.render-component-wrapper > section,
-.render-component-wrapper > article,
-.render-component-wrapper > aside,
-.render-component-wrapper > header,
-.render-component-wrapper > footer,
-.render-component-wrapper > nav,
-.render-component-wrapper > main,
-.render-component-wrapper > form,
-.render-component-wrapper > ul,
-.render-component-wrapper > ol {
-  position: relative;
-  /* Ensure element expands to set height */
+/* For form and main elements, ensure wrapper doesn't constrain width */
+.render-component-wrapper[data-component-type="form"],
+.render-component-wrapper[data-component-type="main"] {
+  width: 100%;
+  max-width: 100%;
+  display: block;
+}
+
+/* Ensure form and main elements inside wrapper maintain their width */
+.render-component-wrapper[data-component-type="form"] > form,
+.render-component-wrapper[data-component-type="main"] > main {
+  width: 100%;
+  max-width: 100%;
   box-sizing: border-box;
 }
 
+/* Preserve component's original display and all other properties */
+.render-component-wrapper > * {
+  /* Ensure element expands to set height */
+  box-sizing: border-box;
+  /* Don't override any component styles - they should be preserved from props.style */
+}
+
+/* For components with display: flex, block, grid, etc., preserve their layout */
+.render-component-wrapper > [style*="display: flex"],
+.render-component-wrapper > [style*="display:block"],
+.render-component-wrapper > [style*="display:grid"] {
+  /* Component's display property should control layout */
+}
+
 .render-component-wrapper.selected-wrapper {
-  /* Selection outline removed */
+  position: relative;
+  outline: 2px solid #667eea !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2), 0 0 0 2px rgba(102, 126, 234, 0.4) !important;
+  z-index: 10;
+  transition: all 0.2s ease;
+  /* Prevent double borders */
+  border: none;
+}
+
+/* Ensure highlighting is visible even when wrapper has display: contents */
+.render-component-wrapper[data-selected="true"].selected-wrapper {
+  outline: 2px solid #667eea !important;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2), 0 0 0 2px rgba(102, 126, 234, 0.4) !important;
+}
+
+/* Prevent child components from showing selection when parent is selected */
+/* But allow highlights if the child itself is selected - use more specific selector */
+.render-component-wrapper.selected-wrapper .render-component-wrapper:not(.selected-wrapper) {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+.render-component-wrapper.selected-wrapper .render-component-wrapper:not(.selected-wrapper)::before,
+.render-component-wrapper.selected-wrapper .render-component-wrapper:not(.selected-wrapper)::after {
+  display: none !important;
+}
+
+.render-component-wrapper.selected-wrapper .render-component-wrapper:not(.selected-wrapper) .selected::after {
+  display: none !important;
+}
+
+/* Ensure directly selected components always show highlight, even if nested in another selected component */
+/* This rule has higher specificity to override the child hiding rules */
+.render-component-wrapper.selected-wrapper.render-component-wrapper.selected-wrapper,
+.render-component-wrapper.selected-wrapper {
+  outline: 2px solid #667eea !important;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2), 0 0 0 2px rgba(102, 126, 234, 0.4) !important;
+}
+
+/* When wrapper uses display: contents, apply selection to first child */
+.render-component-wrapper[data-display-contents="true"].selected-wrapper > *,
+.render-component-wrapper[style*="display: contents"].selected-wrapper > *,
+.render-component-wrapper[style*="display:contents"].selected-wrapper > * {
+  outline: 2px solid #667eea !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2), 0 0 0 2px rgba(102, 126, 234, 0.4) !important;
+  position: relative;
+  z-index: 10;
+}
+
+/* Ensure main and form elements show highlighting even with display: contents */
+.render-component-wrapper[data-display-contents="true"].selected-wrapper > main,
+.render-component-wrapper[data-display-contents="true"].selected-wrapper > form,
+.render-component-wrapper[data-display-contents="true"].selected-wrapper > div,
+.render-component-wrapper[style*="display: contents"].selected-wrapper > main,
+.render-component-wrapper[style*="display: contents"].selected-wrapper > form,
+.render-component-wrapper[style*="display: contents"].selected-wrapper > div {
+  outline: 2px solid #667eea !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2), 0 0 0 2px rgba(102, 126, 234, 0.4) !important;
+  position: relative;
+  z-index: 10;
+}
+
+/* Direct highlighting for main and form elements when selected */
+main.selected-main-form,
+form.selected-main-form,
+main[data-component-selected="true"],
+form[data-component-selected="true"],
+.render-component-wrapper.selected-wrapper > main.selected-main-form,
+.render-component-wrapper.selected-wrapper > form.selected-main-form,
+.render-component-wrapper.selected-wrapper > main[data-component-selected="true"],
+.render-component-wrapper.selected-wrapper > form[data-component-selected="true"] {
+  outline: 2px solid #667eea !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2), 0 0 0 2px rgba(102, 126, 234, 0.4) !important;
+  position: relative !important;
+  z-index: 10 !important;
+}
+
+/* Additional specificity for main element - ensure it always shows */
+.render-component-wrapper.selected-wrapper main.selected-main-form,
+.render-component-wrapper.selected-wrapper main[data-component-selected="true"],
+.render-component-wrapper.selected-wrapper main[data-is-selected="true"],
+.render-component-wrapper[data-main-form-selected="true"] > main,
+.render-component-wrapper[data-component-type="main"].selected-wrapper > main,
+.render-component-wrapper[data-component-type="main"][data-selected="true"] > main {
+  outline: 2px solid #667eea !important;
+  outline-offset: 2px !important;
+  border-radius: 4px !important;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2), 0 0 0 2px rgba(102, 126, 234, 0.4) !important;
+  position: relative !important;
+  z-index: 10 !important;
+}
+
+/* Also apply to wrapper when main/form is selected and wrapper is visible */
+.render-component-wrapper[data-main-form-selected="true"].selected-wrapper,
+.render-component-wrapper[data-component-type="main"].selected-wrapper,
+.render-component-wrapper[data-component-type="main"][data-selected="true"] {
+  outline: 2px solid #667eea !important;
+  outline-offset: 2px !important;
+  border-radius: 4px !important;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2), 0 0 0 2px rgba(102, 126, 234, 0.4) !important;
+  position: relative !important;
+  z-index: 10 !important;
+}
+
+/* Also apply to wrapper when main/form is selected and wrapper is visible */
+.render-component-wrapper[data-main-form-selected="true"].selected-wrapper {
+  outline: 2px solid #667eea !important;
+  outline-offset: 2px !important;
+  border-radius: 4px !important;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2), 0 0 0 2px rgba(102, 126, 234, 0.4) !important;
+  position: relative !important;
+  z-index: 10 !important;
+}
+
+/* Prevent nested highlights when parent uses display: contents */
+/* But allow highlights if the child itself is selected */
+.render-component-wrapper[style*="display: contents"].selected-wrapper > * > .render-component-wrapper:not(.selected-wrapper) {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+.render-component-wrapper[style*="display: contents"].selected-wrapper > * > .render-component-wrapper:not(.selected-wrapper)::before,
+.render-component-wrapper[style*="display: contents"].selected-wrapper > * > .render-component-wrapper:not(.selected-wrapper)::after {
+  display: none !important;
+}
+
+.render-component-wrapper[style*="display: contents"].selected-wrapper > * > .render-component-wrapper:not(.selected-wrapper) .selected::after {
+  display: none !important;
+}
+
+.render-component-wrapper.selected-wrapper::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  right: -4px;
+  bottom: -4px;
+  border: none;
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: -1;
+  box-sizing: border-box;
+  /* Removed border to prevent double line - outline already provides the border */
+}
+
+/* For display: contents, use pseudo-element on first child - no border to prevent double line */
+.render-component-wrapper[style*="display: contents"].selected-wrapper > *::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  right: -4px;
+  bottom: -4px;
+  border: none;
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: -1;
+  /* Removed border - outline already provides the border */
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.02);
+  }
 }
 
 .component-placeholder {
@@ -40,6 +232,26 @@
   border: 2px dashed #ddd;
   border-radius: 4px;
   padding: 0.5rem;
+  transition: all 0.2s ease;
+}
+
+.component-placeholder:hover {
+  border-color: #667eea;
+  background: #f0f4ff;
+  color: #667eea;
+}
+
+/* Dragging styles */
+.render-component-wrapper.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.render-component-wrapper.drag-over {
+  outline: 2px dashed #667eea !important;
+  outline-offset: 2px;
+  background: rgba(102, 126, 234, 0.05);
+  border-radius: 4px;
   box-sizing: border-box;
 }
 
@@ -69,8 +281,25 @@
   background: #c0392b;
 }
 
-/* Selected component styling */
+/* Selected component styling - hide if wrapper is already selected */
+.render-component-wrapper.selected-wrapper .selected::after {
+  display: none;
+}
+
 .selected {
-  /* Selection outline removed */
+  position: relative;
+}
+
+.selected::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  right: -2px;
+  bottom: -2px;
+  border: 2px solid #667eea;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 1;
 }
 

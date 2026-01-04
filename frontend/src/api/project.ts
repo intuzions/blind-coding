@@ -12,7 +12,7 @@ export const projectAPI = {
     return response.data
   },
 
-  create: async (data: { name: string; description?: string }): Promise<Project> => {
+  create: async (data: { name: string; description?: string; frontend_framework?: string; backend_framework?: string; database_type?: string; database_url?: string }): Promise<Project> => {
     const response = await api.post('/projects/', data)
     return response.data
   },

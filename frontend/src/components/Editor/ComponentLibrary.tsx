@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useDrag } from 'react-dnd'
 import {
   FiSquare,
@@ -11,12 +12,12 @@ import {
   FiFileText,
   FiCode,
   FiAlignLeft,
-  FiGrid,
   FiSidebar,
   FiMinus,
-  FiPlus,
   FiCheck,
   FiEdit,
+  FiGrid,
+  FiPackage,
 } from 'react-icons/fi'
 import './ComponentLibrary.css'
 
@@ -48,6 +49,7 @@ const ComponentItem = ({ type, label, icon, defaultProps }: ComponentItemProps) 
 }
 
 const ComponentLibrary = () => {
+
   const components = [
     // Layout & Structure
     {
@@ -418,23 +420,29 @@ const ComponentLibrary = () => {
       icon: <FiType />,
       defaultProps: { children: 'Abbr', title: 'Abbreviation', style: {} },
     },
+
+    // Charts moved to Pre-built Components Modal - use "Pre-built" button above
   ]
 
   return (
-    <div className="component-library">
-      <h3>Components</h3>
-      <div className="component-list">
-        {components.map((comp) => (
-          <ComponentItem
-            key={comp.type}
-            type={comp.type}
-            label={comp.label}
-            icon={comp.icon}
-            defaultProps={comp.defaultProps}
-          />
-        ))}
+    <>
+      <div className="component-library">
+        <div className="component-library-header">
+          <h3>Components</h3>
+        </div>
+        <div className="component-list">
+          {components.map((comp, index) => (
+            <ComponentItem
+              key={`${comp.type}-${comp.label}-${index}`}
+              type={comp.type}
+              label={comp.label}
+              icon={comp.icon}
+              defaultProps={comp.defaultProps}
+            />
+          ))}
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 

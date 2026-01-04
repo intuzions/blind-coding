@@ -5,6 +5,7 @@ import { User } from '../../types'
 interface AuthState {
   user: User | null
   token: string | null
+  refreshToken: string | null
   isAuthenticated: boolean
   loading: boolean
   error: string | null
@@ -13,6 +14,7 @@ interface AuthState {
 const initialState: AuthState = {
   user: null,
   token: localStorage.getItem('token'),
+  refreshToken: localStorage.getItem('refreshToken'),
   isAuthenticated: !!localStorage.getItem('token'),
   loading: false,
   error: null,
@@ -23,6 +25,17 @@ export const loginUser = createAsyncThunk(
   async ({ email, password }: { email: string; password: string }) => {
     const response = await authAPI.login(email, password)
     localStorage.setItem('token', response.access_token)
+    localStorage.setItem('refreshToken', response.refresh_token)
+    return response
+  }
+)
+
+export const refreshAccessToken = createAsyncThunk(
+  'auth/refresh',
+  async (refreshToken: string) => {
+    const response = await authAPI.refreshToken(refreshToken)
+    localStorage.setItem('token', response.access_token)
+    localStorage.setItem('refreshToken', response.refresh_token)
     return response
   }
 )
@@ -55,8 +68,23 @@ const authSlice = createSlice({
     logout: (state) => {
       state.user = null
       state.token = null
+      state.refreshToken = null
       state.isAuthenticated = false
+      const refreshToken = localStorage.getItem('refreshToken')
+      if (refreshToken) {
+        // Call logout API but don't wait for it
+        authAPI.logout(refreshToken).catch((error) => {
+          console.error('Logout error:', error)
+        })
+      }
       localStorage.removeItem('token')
+      localStorage.removeItem('refreshToken')
+    },
+    setTokens: (state, action: PayloadAction<{ access_token: string; refresh_token: string }>) => {
+      state.token = action.payload.access_token
+      state.refreshToken = action.payload.refresh_token
+      localStorage.setItem('token', action.payload.access_token)
+      localStorage.setItem('refreshToken', action.payload.refresh_token)
     },
     clearError: (state) => {
       state.error = null
@@ -71,7 +99,20 @@ const authSlice = createSlice({
       .addCase(loginUser.fulfilled, (state, action) => {
         state.loading = false
         state.token = action.payload.access_token
+        state.refreshToken = action.payload.refresh_token
         state.isAuthenticated = true
+      })
+      .addCase(refreshAccessToken.fulfilled, (state, action) => {
+        state.token = action.payload.access_token
+        state.refreshToken = action.payload.refresh_token
+        state.isAuthenticated = true
+      })
+      .addCase(refreshAccessToken.rejected, (state) => {
+        state.token = null
+        state.refreshToken = null
+        state.isAuthenticated = false
+        localStorage.removeItem('token')
+        localStorage.removeItem('refreshToken')
       })
       .addCase(loginUser.rejected, (state, action) => {
         state.loading = false
@@ -95,6 +136,6 @@ const authSlice = createSlice({
   },
 })
 
-export const { logout, clearError } = authSlice.actions
+export const { logout, clearError, setTokens } = authSlice.actions
 export default authSlice.reducer
 

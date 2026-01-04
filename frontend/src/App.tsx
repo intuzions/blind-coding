@@ -8,6 +8,8 @@ import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import Editor from './pages/Editor'
 import ProtectedRoute from './components/ProtectedRoute'
+import { ToastProvider } from './components/Toast'
+import { ConfirmationProvider } from './components/ConfirmationModal'
 
 function App() {
   const dispatch = useAppDispatch()
@@ -24,9 +26,12 @@ function App() {
   console.log('Rendering App, isAuthenticated:', isAuthenticated)
 
   return (
-    <div style={{ width: '100%', minHeight: '100vh', backgroundColor: '#f5f5f5' }}>
-      <Navbar />
-      <Routes>
+    <ToastProvider>
+      <ConfirmationProvider>
+        <div style={{ width: '100%', height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: '#f5f5f5' }}>
+          <Navbar />
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+          <Routes>
         <Route
           path="/login"
           element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />}
@@ -52,8 +57,11 @@ function App() {
           }
         />
         <Route path="/" element={<Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />} />
-      </Routes>
-    </div>
+        </Routes>
+        </div>
+        </div>
+      </ConfirmationProvider>
+    </ToastProvider>
   )
 }
 

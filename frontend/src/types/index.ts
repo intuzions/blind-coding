@@ -16,14 +16,21 @@ export interface Project {
   html_content?: string
   css_content?: string
   component_tree?: any
+  configuration?: any // Project configuration as JSON
   image_url?: string
   published?: string
+  frontend_framework?: string
+  backend_framework?: string
+  application_url?: string
+  database_type?: string
+  database_url?: string
   created_at: string
   updated_at?: string
 }
 
 export interface Token {
   access_token: string
+  refresh_token: string
   token_type: string
 }
 

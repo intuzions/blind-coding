@@ -14,6 +14,29 @@ export const authAPI = {
     return response.data
   },
 
+  refreshToken: async (refreshToken: string): Promise<Token> => {
+    const formData = new FormData()
+    formData.append('username', refreshToken)  // OAuth2PasswordRequestForm uses 'username' field
+    formData.append('password', '')  // Required but not used
+    const response = await api.post('/auth/refresh', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+    return response.data
+  },
+
+  logout: async (refreshToken: string): Promise<void> => {
+    const formData = new FormData()
+    formData.append('username', refreshToken)  // OAuth2PasswordRequestForm uses 'username' field
+    formData.append('password', '')  // Required but not used
+    await api.post('/auth/logout', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+  },
+
   register: async (data: {
     username: string
     email: string

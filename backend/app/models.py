@@ -16,6 +16,19 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     projects = relationship("Project", back_populates="owner")
+    refresh_tokens = relationship("RefreshToken", back_populates="user")
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String, unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    revoked = Column(Integer, default=0)  # 0 = active, 1 = revoked
+
+    user = relationship("User", back_populates="refresh_tokens")
 
 class Project(Base):
     __tablename__ = "projects"
@@ -27,8 +40,14 @@ class Project(Base):
     html_content = Column(Text, nullable=True)
     css_content = Column(Text, nullable=True)
     component_tree = Column(JSON, nullable=True)
+    configuration = Column(JSON, nullable=True)  # Store project configuration as JSON
     image_url = Column(String, nullable=True)
     published = Column(String, nullable=True)
+    frontend_framework = Column(String, nullable=True)  # e.g., 'react', 'vue', 'angular'
+    backend_framework = Column(String, nullable=True)  # e.g., 'fastapi', 'express', 'django'
+    application_url = Column(String, nullable=True)  # URL to access the generated application
+    database_type = Column(String, nullable=True)  # e.g., 'postgresql', 'mysql', 'sqlite', 'mongodb'
+    database_url = Column(String, nullable=True)  # Database connection URL
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
