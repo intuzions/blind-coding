@@ -31,7 +31,19 @@ export const fetchProject = createAsyncThunk(
 
 export const createProject = createAsyncThunk(
   'projects/create',
-  async (data: { name: string; description?: string; frontend_framework?: string; backend_framework?: string; database_type?: string; database_url?: string }) => {
+  async (data: { 
+    name: string; 
+    description?: string; 
+    frontend_framework?: string; 
+    backend_framework?: string; 
+    database_type?: string; 
+    database_url?: string;
+    database_name?: string;
+    database_username?: string;
+    database_password?: string;
+    database_host?: string;
+    database_port?: string;
+  }) => {
     const response = await projectAPI.create(data)
     return response
   }

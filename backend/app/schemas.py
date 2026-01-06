@@ -18,6 +18,7 @@ class UserResponse(UserBase):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     personal_website: Optional[str] = None
+    is_admin: Optional[int] = 0
     created_at: datetime
 
     class Config:
@@ -30,6 +31,11 @@ class ProjectBase(BaseModel):
     backend_framework: Optional[str] = None
     database_type: Optional[str] = None
     database_url: Optional[str] = None
+    database_name: Optional[str] = None
+    database_username: Optional[str] = None
+    database_password: Optional[str] = None
+    database_host: Optional[str] = None
+    database_port: Optional[str] = None
 
 class ProjectCreate(ProjectBase):
     pass

@@ -1,0 +1,349 @@
+.movable-ai-prompt-box {
+  position: fixed;
+  width: 400px;
+  max-width: 90vw;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  border: 1px solid #e0e0e0;
+}
+
+.movable-ai-prompt-box.dragging {
+  cursor: grabbing;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  transform: scale(1.02);
+}
+
+.movable-ai-prompt-box.minimized {
+  height: auto;
+}
+
+.movable-ai-prompt-box:not(.minimized) {
+  height: 600px;
+  max-height: 80vh;
+}
+
+.prompt-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  cursor: move;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.prompt-box-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.prompt-box-icon {
+  font-size: 1.2rem;
+}
+
+.prompt-box-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.prompt-box-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.prompt-box-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+  padding: 0;
+}
+
+.prompt-box-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.prompt-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1rem;
+  background: #f8f9fa;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+}
+
+.prompt-chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.prompt-chat-messages::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.prompt-chat-messages::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.prompt-welcome-message {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #666;
+}
+
+.welcome-icon {
+  font-size: 3rem;
+  color: #667eea;
+  margin-bottom: 1rem;
+}
+
+.prompt-welcome-message h4 {
+  margin: 0 0 0.5rem 0;
+  color: #333;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.prompt-welcome-message p {
+  margin: 0 0 1.5rem 0;
+  font-size: 0.9rem;
+}
+
+.prompt-examples {
+  margin-top: 1.5rem;
+}
+
+.prompt-example {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.prompt-example strong {
+  color: #667eea;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.prompt-example span {
+  font-size: 0.75rem;
+  color: #666;
+  font-family: 'Courier New', monospace;
+  padding: 0.25rem 0;
+}
+
+.prompt-message {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.prompt-message.user {
+  align-items: flex-end;
+}
+
+.prompt-message.assistant {
+  align-items: flex-start;
+}
+
+.prompt-message-content {
+  max-width: 85%;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.prompt-message.user .prompt-message-content {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.prompt-message.assistant .prompt-message-content {
+  background: white;
+  color: #333;
+  border: 1px solid #e0e0e0;
+  border-bottom-left-radius: 4px;
+}
+
+.prompt-message-time {
+  font-size: 0.7rem;
+  color: #999;
+  padding: 0 0.5rem;
+}
+
+.prompt-typing-indicator {
+  display: flex;
+  gap: 4px;
+  padding: 0.75rem 1rem;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  border-bottom-left-radius: 4px;
+}
+
+.prompt-typing-indicator span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #667eea;
+  animation: typing 1.4s infinite;
+}
+
+.prompt-typing-indicator span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.prompt-typing-indicator span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.7;
+  }
+  30% {
+    transform: translateY(-10px);
+    opacity: 1;
+  }
+}
+
+.prompt-input-container {
+  display: flex;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: white;
+  border-top: 1px solid #e0e0e0;
+  flex-shrink: 0;
+  align-items: flex-end;
+}
+
+.prompt-input {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  border: 2px solid #e0e0e0;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  resize: none;
+  max-height: 120px;
+  min-height: 50px;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+  line-height: 1.5;
+}
+
+.prompt-input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.prompt-input:disabled {
+  background: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.prompt-send-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+  padding: 0;
+}
+
+.prompt-send-btn:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.prompt-send-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.prompt-send-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.prompt-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .movable-ai-prompt-box {
+    width: 90vw;
+    max-width: 90vw;
+  }
+
+  .movable-ai-prompt-box:not(.minimized) {
+    height: 500px;
+    max-height: 70vh;
+  }
+}
+
+

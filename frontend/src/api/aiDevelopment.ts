@@ -5,6 +5,8 @@ export interface CodeGenerationRequest {
   component_type?: string
   language?: string
   context?: Record<string, any>
+  frontend_framework?: string
+  backend_framework?: string
 }
 
 export interface ComponentGenerationRequest {
@@ -12,6 +14,8 @@ export interface ComponentGenerationRequest {
   component_type?: string
   style_preferences?: Record<string, any>
   existing_components?: Array<Record<string, any>>
+  frontend_framework?: string
+  backend_framework?: string
 }
 
 export interface CodeExplanationRequest {
@@ -29,6 +33,15 @@ export interface PageGenerationRequest {
   description: string
   page_type?: string
   style_preferences?: Record<string, any>
+  frontend_framework?: string
+  backend_framework?: string
+}
+
+export interface ApplicationGenerationRequest {
+  description: string
+  css_framework?: string  // tailwind, bootstrap
+  frontend_framework?: string
+  backend_framework?: string
 }
 
 export interface AIDevelopmentResponse {
@@ -61,6 +74,11 @@ export const aiDevelopmentAPI = {
 
   generatePage: async (request: PageGenerationRequest): Promise<AIDevelopmentResponse> => {
     const response = await api.post<AIDevelopmentResponse>('/ai-dev/generate-page', request)
+    return response.data
+  },
+
+  generateApplication: async (request: ApplicationGenerationRequest): Promise<AIDevelopmentResponse> => {
+    const response = await api.post<AIDevelopmentResponse>('/ai-dev/generate-application', request)
     return response.data
   }
 }

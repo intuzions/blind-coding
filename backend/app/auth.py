@@ -7,11 +7,12 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import get_db
-import os
+from app.services.settings_loader import get_secret_key, get_refresh_token_secret_key
 import secrets
 
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this-in-production")
-REFRESH_TOKEN_SECRET_KEY = os.getenv("REFRESH_TOKEN_SECRET_KEY", "your-refresh-secret-key-change-this-in-production")
+# These will be loaded from database, with fallback to environment variables
+SECRET_KEY = get_secret_key()
+REFRESH_TOKEN_SECRET_KEY = get_refresh_token_secret_key()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7

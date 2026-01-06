@@ -5,7 +5,7 @@ import os
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://nocode_user:nocode_password@localhost:5432/d2home"
+    "postgresql://ai_apps_user:ai_apps_password@localhost:5432/ai_apps"
 )
 
 engine = create_engine(DATABASE_URL)

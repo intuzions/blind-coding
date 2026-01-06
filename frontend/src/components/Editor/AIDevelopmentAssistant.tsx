@@ -1,48 +1,102 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { aiDevelopmentAPI, CodeGenerationRequest, ComponentGenerationRequest, CodeExplanationRequest, BugFixRequest, PageGenerationRequest } from '../../api/aiDevelopment'
 import { useToast } from '../Toast'
-import { FiCode, FiLayers, FiHelpCircle, FiAlertTriangle, FiFileText, FiSend, FiX, FiCopy, FiCheck, FiEye, FiCheckCircle } from 'react-icons/fi'
+import { FiSend, FiX, FiCopy, FiCheck, FiEye, FiCheckCircle, FiUpload, FiLoader, FiEdit2, FiTag, FiZap, FiMove, FiMaximize2, FiMinimize2, FiArrowUp, FiArrowDown, FiArrowLeft, FiArrowRight, FiRefreshCw, FiTrash2, FiSave } from 'react-icons/fi'
 import RenderComponent from './RenderComponent'
 import { ComponentNode } from '../../types/editor'
+import { analyzeImageAndGenerateComponents, ImageAnalysisResult } from '../../services/imageAnalysis'
+import axios from 'axios'
 import './AIDevelopmentAssistant.css'
+import './ImageUploadModal.css'
 
 interface AIDevelopmentAssistantProps {
   isOpen: boolean
   onClose: () => void
   onAddComponent?: (component: any) => void
   existingComponents?: any[]
+  onImageUpload?: (file: File) => Promise<void>
+  initialTab?: 'create' | 'upload'
+  frontendFramework?: string
+  backendFramework?: string
 }
 
-type AssistantMode = 'code' | 'component' | 'explain' | 'bugfix' | 'page'
+type TabType = 'create' | 'upload'
+
+interface Mark {
+  id: string
+  type: 'graph' | 'card' | 'text' | 'image' | 'button' | 'input' | 'container'
+  componentName?: string
+  bounds: { x: number; y: number; width: number; height: number }
+  selected?: boolean
+  color?: string
+  extractedText?: string
+}
 
 const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
   isOpen,
   onClose,
   onAddComponent,
-  existingComponents = []
+  existingComponents = [],
+  onImageUpload,
+  initialTab = 'create',
+  frontendFramework,
+  backendFramework
 }) => {
-  const [activeMode, setActiveMode] = useState<AssistantMode>('component')
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab)
+  
+  // Update tab when initialTab prop changes
+  useEffect(() => {
+    if (isOpen) {
+      setActiveTab(initialTab)
+    }
+  }, [isOpen, initialTab])
   const [input, setInput] = useState('')
   const [result, setResult] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [showPreview, setShowPreview] = useState(false)
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false)
-  const [previewComponents, setPreviewComponents] = useState<ComponentNode[]>([])
+  const [currentRequestType, setCurrentRequestType] = useState<'component' | 'page' | 'code' | 'explain' | 'bugfix' | null>(null)
   const { showToast } = useToast()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [chatHistory, setChatHistory] = useState<Array<{ type: 'user' | 'assistant'; content: string; timestamp: Date }>>([])
+  
+  // Image upload states
+  const [dragActive, setDragActive] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [preview, setPreview] = useState<string | null>(null)
+  const [annotatedPreview, setAnnotatedPreview] = useState<string | null>(null)
+  const [analysisResult, setAnalysisResult] = useState<ImageAnalysisResult | null>(null)
+  const [currentFile, setCurrentFile] = useState<File | null>(null)
+  const [customMarks, setCustomMarks] = useState<Mark[]>([])
+  const [selectedComponentType, setSelectedComponentType] = useState<string>('')
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [isMarkingMode, setIsMarkingMode] = useState(false)
+  const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null)
+  const [drawCurrent, setDrawCurrent] = useState<{ x: number; y: number } | null>(null)
+  const [selectedMarkId, setSelectedMarkId] = useState<string | null>(null)
+  const [showCustomMarking, setShowCustomMarking] = useState(false)
+  const [isAdjustingMode, setIsAdjustingMode] = useState(false)
+  const imageContainerRef = useRef<HTMLDivElement>(null)
+  const imageRef = useRef<HTMLImageElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chatHistory])
   
-  // Reset preview when mode changes
+  // Reset result when tab changes
   useEffect(() => {
-    setShowPreview(false)
-    setPreviewComponents([])
+    if (activeTab === 'create') {
     setResult(null)
-  }, [activeMode])
+      setCurrentRequestType(null)
+    } else {
+      setPreview(null)
+      setAnnotatedPreview(null)
+      setAnalysisResult(null)
+      setCurrentFile(null)
+      setCustomMarks([])
+    }
+  }, [activeTab])
   
   // Convert AI-generated component structure to ComponentNode format for preview
   const convertToPreviewComponents = React.useCallback((aiComponent: any): ComponentNode[] => {
@@ -131,18 +185,49 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
     }
   }, [])
   
-  // Auto-show preview when component is generated
-  useEffect(() => {
-    if (result?.result && activeMode === 'component') {
-      try {
-        const previewComps = convertToPreviewComponents(result.result)
-        setPreviewComponents(previewComps)
-        setShowPreview(true)
-      } catch (error) {
-        console.error('Error creating preview:', error)
-      }
+
+  // Intelligently detect request type from user input with better accuracy
+  const detectRequestType = (message: string): 'component' | 'page' | 'code' | 'explain' | 'bugfix' => {
+    const lower = message.toLowerCase().trim()
+    const words = lower.split(/\s+/)
+    
+    // Check for explanation requests (must be clear explanation intent)
+    if ((lower.includes('explain') || lower.includes('what does') || lower.includes('how does') || 
+         lower.includes('what is') || lower.includes('meaning of') || lower.includes('tell me about')) &&
+        (lower.includes('code') || lower.includes('function') || lower.includes('this') || 
+         message.includes('```') || message.split('\n').length > 3)) {
+      return 'explain'
     }
-  }, [result, activeMode, convertToPreviewComponents])
+    
+    // Check for bug fix requests (must have code or error context)
+    if ((lower.includes('fix') || lower.includes('bug') || lower.includes('error') || 
+         lower.includes('debug') || lower.includes('broken') || lower.includes('not working')) &&
+        (lower.includes('code') || lower.includes('function') || message.includes('```') || 
+         lower.includes('error') || message.split('\n').length > 3)) {
+      return 'bugfix'
+    }
+    
+    // Check for page requests (full page/website structure)
+    if ((lower.includes('page') || lower.includes('landing') || lower.includes('dashboard') || 
+         lower.includes('website') || lower.includes('site') || lower.includes('full page') ||
+         lower.includes('complete page') || lower.includes('entire page')) &&
+        !lower.includes('component')) {
+      return 'page'
+    }
+    
+    // Check for pure code generation (not component/page)
+    if ((lower.includes('generate code') || lower.includes('write code') || 
+         lower.includes('create function') || lower.includes('helper function') ||
+         lower.includes('utility function') || lower.includes('algorithm') ||
+         lower.includes('script') || lower.includes('hook') || lower.includes('custom hook')) &&
+        !lower.includes('component') && !lower.includes('page')) {
+      return 'code'
+    }
+    
+    // Default to component generation (most common use case)
+    // This includes: "create a button", "add a form", "make a card", etc.
+    return 'component'
+  }
 
   const handleGenerate = async () => {
     if (!input.trim()) {
@@ -157,12 +242,16 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
 
     try {
       let response: any
+      const requestType = detectRequestType(userMessage)
+      setCurrentRequestType(requestType)
 
-      switch (activeMode) {
+      switch (requestType) {
         case 'code':
           const codeRequest: CodeGenerationRequest = {
             description: userMessage,
-            language: 'javascript'
+            language: frontendFramework === 'react' ? 'javascript' : frontendFramework === 'vue' ? 'javascript' : 'javascript',
+            frontend_framework: frontendFramework,
+            backend_framework: backendFramework
           }
           response = await aiDevelopmentAPI.generateCode(codeRequest)
           break
@@ -170,7 +259,9 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
         case 'component':
           const componentRequest: ComponentGenerationRequest = {
             description: userMessage,
-            existing_components: existingComponents
+            existing_components: existingComponents,
+            frontend_framework: frontendFramework,
+            backend_framework: backendFramework
           }
           response = await aiDevelopmentAPI.generateComponent(componentRequest)
           break
@@ -193,7 +284,9 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
 
         case 'page':
           const pageRequest: PageGenerationRequest = {
-            description: userMessage
+            description: userMessage,
+            frontend_framework: frontendFramework,
+            backend_framework: backendFramework
           }
           response = await aiDevelopmentAPI.generatePage(pageRequest)
           break
@@ -201,24 +294,31 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
 
       setResult(response)
       
-      // For component generation, show a success message instead of the raw result
+      // For component/page generation, show a success message instead of the raw result
       let assistantMessage: string
-      if (activeMode === 'component' && response.result) {
-        // Check if result is a valid component structure (object with type)
-        if (typeof response.result === 'object' && response.result !== null && 'type' in response.result) {
-          assistantMessage = response.explanation || 'Component generated successfully! Check the preview below.'
+      if ((requestType === 'component' || requestType === 'page') && response.result) {
+        // Check if result is a valid component structure (object with type) or array (for pages)
+        const isValidComponent = typeof response.result === 'object' && response.result !== null && 
+                                  ('type' in response.result || Array.isArray(response.result))
+        
+        if (isValidComponent) {
+          if (Array.isArray(response.result)) {
+            assistantMessage = response.explanation || `Generated page with ${response.result.length} sections! Added to canvas.`
+          } else {
+            assistantMessage = response.explanation || 'Generated successfully! Added to canvas.'
+          }
         } else if (typeof response.result === 'string') {
           // If result is a string (shouldn't happen with our fixes, but handle it)
           // Check if it's just the description repeated
           const userMessageLower = userMessage.toLowerCase().trim()
           const resultStr = response.result.toLowerCase().trim()
           if (resultStr === userMessageLower || resultStr.includes(userMessageLower)) {
-            assistantMessage = 'Component generation in progress... Please try again or use a more specific description.'
+            assistantMessage = 'Generation in progress... Please try again or use a more specific description.'
           } else {
             assistantMessage = response.explanation || response.result || 'Generated successfully'
           }
         } else {
-          assistantMessage = response.explanation || 'Component generated successfully!'
+          assistantMessage = response.explanation || 'Generated successfully!'
         }
       } else {
         assistantMessage = response.explanation || (typeof response.result === 'string' ? response.result : JSON.stringify(response.result)) || 'Generated successfully'
@@ -226,22 +326,33 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
       
       setChatHistory(prev => [...prev, { type: 'assistant', content: assistantMessage, timestamp: new Date() }])
 
-      // If component generation, create preview components and show preview automatically
-      if (activeMode === 'component' && response.result) {
-        // Validate that result is a proper component structure
-        if (typeof response.result === 'object' && response.result !== null && 'type' in response.result) {
-          try {
-            const previewComps = convertToPreviewComponents(response.result)
-            setPreviewComponents(previewComps)
-            setShowPreview(true)
-            showToast('Component generated! Preview it and add to canvas if you like it.', 'success')
-          } catch (error) {
-            console.error('Error creating preview:', error)
-            showToast('Component generated, but preview failed. You can still add it to canvas.', 'warning')
+      // If component/page generation, automatically add to canvas
+      if ((requestType === 'component' || requestType === 'page') && response.result && onAddComponent) {
+        // Validate that result is a proper component structure (object with type) or array (for pages)
+        const isValidComponent = typeof response.result === 'object' && response.result !== null && 
+                                  ('type' in response.result || Array.isArray(response.result))
+        
+        if (isValidComponent) {
+        try {
+            // Automatically add to canvas
+            if (Array.isArray(response.result) && response.result.length > 0) {
+              // Page with multiple components
+              onAddComponent(response.result)
+              showToast(`Page with ${response.result.length} sections added to canvas!`, 'success')
+            } else {
+              // Single component
+              onAddComponent(response.result)
+              showToast('Component added to canvas!', 'success')
+            }
+            // Clear result after adding
+            setResult(null)
+        } catch (error) {
+            console.error('Error adding to canvas:', error)
+            showToast('Generated, but failed to add to canvas.', 'error')
           }
         } else {
           // Invalid component structure - show error
-          showToast('Failed to generate valid component structure. Please try again with a more specific description.', 'error')
+          showToast('Failed to generate valid structure. Please try again with a more specific description.', 'error')
         }
       }
 
@@ -255,59 +366,7 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
   }
 
 
-  const handleShowPreview = () => {
-    if (result?.result) {
-      try {
-        const previewComps = convertToPreviewComponents(result.result)
-        setPreviewComponents(previewComps)
-        setShowPreview(!showPreview)
-      } catch (error) {
-        console.error('Error creating preview:', error)
-        showToast('Failed to create preview', 'error')
-      }
-    }
-  }
-  
-  // Reset preview when result changes
-  useEffect(() => {
-    if (result?.result && activeMode === 'component') {
-      try {
-        const previewComps = convertToPreviewComponents(result.result)
-        setPreviewComponents(previewComps)
-        setShowPreview(true)
-      } catch (error) {
-        console.error('Error creating preview:', error)
-      }
-    } else {
-      setShowPreview(false)
-      setPreviewComponents([])
-    }
-  }, [result, activeMode])
-
-  const handleConfirmAdd = () => {
-    if (result?.result && onAddComponent) {
-      if (Array.isArray(result.result)) {
-        result.result.forEach((comp: any) => {
-          onAddComponent(comp)
-        })
-        showToast('Components added to canvas!', 'success')
-      } else {
-        onAddComponent(result.result)
-        showToast('Component added to canvas!', 'success')
-      }
-      setShowConfirmDialog(false)
-      setShowPreview(false)
-      setResult(null)
-      setPreviewComponents([])
-    }
-  }
-
-  const handleAddToCanvas = () => {
-    if (result?.result && onAddComponent) {
-      // Show confirmation dialog
-      setShowConfirmDialog(true)
-    }
-  }
+  // Preview and add functions removed - components are added directly to canvas automatically
 
   const handleCopyCode = () => {
     if (result?.code || result?.result) {
@@ -319,21 +378,111 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
     }
   }
 
-  const getPlaceholder = () => {
-    switch (activeMode) {
-      case 'code':
-        return 'Describe the code you want to generate... (e.g., "Create a React button component with hover effects")'
-      case 'component':
-        return 'Describe the component you want to create... (e.g., "Create a modern card component with shadow")'
-      case 'explain':
-        return 'Paste the code you want explained...'
-      case 'bugfix':
-        return 'Paste the code with bugs or describe the issue...'
-      case 'page':
-        return 'Describe the page you want to create... (e.g., "Create a landing page with hero section and features")'
-      default:
-        return 'Enter your request...'
+  // Image upload handlers
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true)
+    } else if (e.type === 'dragleave') {
+      setDragActive(false)
     }
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0]
+      if (file.type.startsWith('image/')) {
+        handleFile(file)
+      }
+    }
+  }
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFile(e.target.files[0])
+    }
+  }
+
+  const handleFile = async (file: File) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      setPreview(e.target?.result as string)
+    }
+    reader.readAsDataURL(file)
+    
+    setCurrentFile(file)
+    setAnnotatedPreview(null)
+    setAnalysisResult(null)
+
+    setAnalyzing(true)
+    try {
+      const token = localStorage.getItem('token')
+      if (!token) {
+        throw new Error('Authentication required')
+      }
+
+      const formData = new FormData()
+      formData.append('image', file)
+
+      const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8000'
+      const response = await axios.post<ImageAnalysisResult>(
+        `${API_BASE_URL}/api/analyze-image`,
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            'Authorization': `Bearer ${token}`,
+          },
+        }
+      )
+
+      setAnalysisResult(response.data)
+      if (response.data.annotatedImage) {
+        setAnnotatedPreview(response.data.annotatedImage)
+      }
+    } catch (error) {
+      console.error('Analysis failed:', error)
+      showToast('Failed to analyze image', 'error')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  const handleGenerateComponents = async () => {
+    if (!currentFile || !onImageUpload) return
+
+    setUploading(true)
+    try {
+      await onImageUpload(currentFile)
+      showToast('Components generated successfully!', 'success')
+      setPreview(null)
+      setAnnotatedPreview(null)
+      setAnalysisResult(null)
+      setCurrentFile(null)
+      setCustomMarks([])
+    } catch (error) {
+      console.error('Upload failed:', error)
+      showToast('Failed to generate components from image', 'error')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleClick = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleReset = () => {
+    setPreview(null)
+    setAnnotatedPreview(null)
+    setAnalysisResult(null)
+    setCurrentFile(null)
+    setCustomMarks([])
   }
 
   if (!isOpen) return null
@@ -353,51 +502,51 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
 
         <div className="ai-dev-assistant-tabs">
           <button
-            className={`ai-dev-tab ${activeMode === 'component' ? 'active' : ''}`}
-            onClick={() => setActiveMode('component')}
+            className={`ai-dev-tab ${activeTab === 'create' ? 'active' : ''}`}
+            onClick={() => setActiveTab('create')}
           >
-            <FiLayers /> Generate Component
+            <FiZap /> Create Application
           </button>
           <button
-            className={`ai-dev-tab ${activeMode === 'code' ? 'active' : ''}`}
-            onClick={() => setActiveMode('code')}
+            className={`ai-dev-tab ${activeTab === 'upload' ? 'active' : ''}`}
+            onClick={() => setActiveTab('upload')}
           >
-            <FiCode /> Generate Code
-          </button>
-          <button
-            className={`ai-dev-tab ${activeMode === 'page' ? 'active' : ''}`}
-            onClick={() => setActiveMode('page')}
-          >
-            <FiFileText /> Generate Page
-          </button>
-          <button
-            className={`ai-dev-tab ${activeMode === 'explain' ? 'active' : ''}`}
-            onClick={() => setActiveMode('explain')}
-          >
-            <FiHelpCircle /> Explain Code
-          </button>
-          <button
-            className={`ai-dev-tab ${activeMode === 'bugfix' ? 'active' : ''}`}
-            onClick={() => setActiveMode('bugfix')}
-          >
-            <FiAlertTriangle /> Fix Bugs
+            <FiUpload /> Upload Image
           </button>
         </div>
 
         <div className="ai-dev-assistant-content">
+          {activeTab === 'create' ? (
+            <>
           <div className="ai-dev-chat-area">
             {chatHistory.length === 0 ? (
               <div className="ai-dev-welcome">
                 <div className="ai-dev-welcome-icon">🤖</div>
-                <h3>Welcome to AI Development Assistant!</h3>
-                <p>I can help you:</p>
+                  <h3>Create Application with AI</h3>
+                  <p>Describe what you want to create and I'll generate it for you:</p>
                 <ul>
-                  <li>Generate React components from descriptions</li>
-                  <li>Create code snippets in various languages</li>
-                  <li>Build complete page structures</li>
-                  <li>Explain how code works</li>
-                  <li>Fix bugs in your code</li>
+                    <li>Components: "Create a login form" or "Add a card component"</li>
+                    <li>Pages: "Create a landing page" or "Build a dashboard"</li>
+                    <li>Code: "Generate a utility function" or "Create a React hook"</li>
+                    <li>Explain: "Explain this code" or "What does this function do?"</li>
+                    <li>Fix: "Fix this bug" or "Debug this error"</li>
                 </ul>
+                  {(frontendFramework || backendFramework) && (
+                    <div className="ai-dev-framework-info" style={{ 
+                      marginTop: '1rem', 
+                      padding: '1rem', 
+                      background: '#e3f2fd', 
+                      borderRadius: '8px',
+                      border: '1px solid #90caf9'
+                    }}>
+                      <strong>Project Frameworks:</strong>
+                      {frontendFramework && <p style={{ margin: '0.25rem 0', color: '#1976d2' }}>Frontend: {frontendFramework.toUpperCase()}</p>}
+                      {backendFramework && <p style={{ margin: '0.25rem 0', color: '#1976d2' }}>Backend: {backendFramework.toUpperCase()}</p>}
+                      <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.85rem', color: '#555' }}>
+                        Generated code will be compatible with your selected frameworks and mapped to the canvas.
+                      </p>
+                    </div>
+                  )}
                 <p className="ai-dev-note">
                   <strong>Note:</strong> Configure OPENAI_API_KEY or ANTHROPIC_API_KEY in your backend .env file to enable full LLM features.
                 </p>
@@ -440,10 +589,10 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
               </div>
             )}
 
-            {result && (
+                {result && (currentRequestType === 'code' || currentRequestType === 'explain' || currentRequestType === 'bugfix') && (
               <div className="ai-dev-result-panel">
                 <div className="ai-dev-result-header">
-                  <h4>Generated Component</h4>
+                      <h4>Result</h4>
                   <div className="ai-dev-result-actions">
                     {(result.code || result.result) && (
                       <button onClick={handleCopyCode} className="ai-dev-copy-btn">
@@ -451,42 +600,8 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
                         {copied ? 'Copied' : 'Copy Code'}
                       </button>
                     )}
-                    {activeMode === 'component' && result.result && (
-                      <>
-                        <button onClick={handleShowPreview} className="ai-dev-preview-btn">
-                          <FiEye /> {showPreview ? 'Hide Preview' : 'Show Preview'}
-                        </button>
-                        {onAddComponent && (
-                          <button onClick={handleAddToCanvas} className="ai-dev-add-btn">
-                            <FiCheckCircle /> Add to Canvas
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </div>
                 </div>
-                
-                {showPreview && previewComponents.length > 0 && (
-                  <div className="ai-dev-preview-container">
-                    <h5>Preview:</h5>
-                    <div className="ai-dev-preview-content">
-                      {previewComponents
-                        .filter(comp => !comp.parentId)
-                        .map((comp) => (
-                          <RenderComponent
-                            key={comp.id}
-                            component={comp}
-                            allComponents={previewComponents}
-                            selectedId={null}
-                            onSelect={() => {}}
-                            onUpdate={() => {}}
-                            onDelete={() => {}}
-                            onAdd={() => {}}
-                          />
-                        ))}
                     </div>
-                  </div>
-                )}
                 
                 <div className="ai-dev-result-content">
                   {result.code ? (
@@ -494,12 +609,9 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
                       <code>{result.code}</code>
                     </pre>
                   ) : result.result ? (
-                    <details className="ai-dev-code-details">
-                      <summary>View Component Structure (JSON)</summary>
                       <pre className="ai-dev-code-block">
-                        <code>{JSON.stringify(result.result, null, 2)}</code>
+                          <code>{typeof result.result === 'string' ? result.result : JSON.stringify(result.result, null, 2)}</code>
                       </pre>
-                    </details>
                   ) : (
                     <p>{result.explanation || result.result}</p>
                   )}
@@ -516,23 +628,6 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
                 )}
               </div>
             )}
-            
-            {showConfirmDialog && (
-              <div className="ai-dev-confirm-overlay" onClick={() => setShowConfirmDialog(false)}>
-                <div className="ai-dev-confirm-dialog" onClick={(e) => e.stopPropagation()}>
-                  <h3>Add to Canvas?</h3>
-                  <p>Do you want to add this component to your canvas?</p>
-                  <div className="ai-dev-confirm-actions">
-                    <button onClick={() => setShowConfirmDialog(false)} className="ai-dev-cancel-btn">
-                      Cancel
-                    </button>
-                    <button onClick={handleConfirmAdd} className="ai-dev-confirm-btn">
-                      <FiCheckCircle /> Yes, Add to Canvas
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="ai-dev-input-area">
@@ -545,9 +640,9 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
                   handleGenerate()
                 }
               }}
-              placeholder={getPlaceholder()}
+                  placeholder="Describe what you want to create... (e.g., 'Create a login form', 'Build a landing page', 'Generate a button component')"
               className="ai-dev-input"
-              rows={activeMode === 'explain' || activeMode === 'bugfix' ? 6 : 3}
+                  rows={3}
               disabled={loading}
             />
             <button
@@ -565,6 +660,79 @@ const AIDevelopmentAssistant: React.FC<AIDevelopmentAssistantProps> = ({
               )}
             </button>
           </div>
+              
+            </>
+          ) : (
+            <div className="ai-dev-upload-area">
+              <div
+                className={`image-upload-dropzone ${dragActive ? 'active' : ''} ${analyzing ? 'uploading' : ''}`}
+                onDragEnter={handleDrag}
+                onDragLeave={handleDrag}
+                onDragOver={handleDrag}
+                onDrop={handleDrop}
+                onClick={!analyzing ? handleClick : undefined}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileInput}
+                  style={{ display: 'none' }}
+                />
+                {analyzing ? (
+                  <div className="image-upload-loading">
+                    <FiLoader className="spinner" />
+                    <p>Analyzing image and detecting components...</p>
+                    <p className="upload-hint">This may take a few moments</p>
+                  </div>
+                ) : preview ? (
+                  <div className="image-upload-preview">
+                    <img src={annotatedPreview || preview} alt="Preview" />
+                    <div className="image-upload-actions">
+                      <button 
+                        className="btn-secondary" 
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleReset()
+                        }}
+                      >
+                        <FiRefreshCw /> Reset
+                      </button>
+                      <button 
+                        className="btn-primary" 
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleGenerateComponents()
+                        }}
+                        disabled={uploading}
+                      >
+                        {uploading ? (
+                          <>
+                            <FiLoader className="spinner" /> Generating...
+                          </>
+                        ) : (
+                          <>
+                            <FiZap /> Generate Components
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="image-upload-placeholder">
+                    <FiUpload className="upload-icon" />
+                    <p>Drag and drop an image here, or click to select</p>
+                    <p className="upload-hint">Supported formats: JPG, PNG, GIF, WebP</p>
+                  </div>
+                )}
+              </div>
+              {analysisResult && (
+                <div className="image-analysis-info">
+                  <p>Detected {analysisResult.detectedElements?.length || 0} elements in the image</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

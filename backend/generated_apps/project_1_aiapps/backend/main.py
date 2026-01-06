@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="D2Home")
+app = FastAPI(title="AiApps")
 
 app.add_middleware(
     CORSMiddleware,
@@ -13,7 +13,7 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to D2Home API"}
+    return {"message": "Welcome to AiApps API"}
 
 @app.get("/health")
 def health_check():

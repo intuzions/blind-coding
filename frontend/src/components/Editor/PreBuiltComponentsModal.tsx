@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useDrag } from 'react-dnd'
-import { FiX, FiGrid, FiSquare, FiUser, FiTrendingUp, FiDollarSign, FiActivity, FiUsers, FiImage, FiZap, FiEdit3, FiMenu, FiDatabase } from 'react-icons/fi'
+import { FiX, FiGrid, FiSquare, FiUser, FiTrendingUp, FiDollarSign, FiActivity, FiUsers, FiImage, FiZap, FiEdit3, FiMenu, FiDatabase, FiFileText, FiTrash2 } from 'react-icons/fi'
+import { ComponentNode, Page } from '../../types/editor'
 import './PreBuiltComponentsModal.css'
 
 // Extend Window interface for Google Charts
@@ -666,7 +667,47 @@ const TableComponentItem = ({ component }: { component: TableComponent }) => {
 
 const PreBuiltComponentsModal: React.FC<PreBuiltComponentsModalProps> = ({ isOpen, onClose }) => {
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null)
-  const [activeTab, setActiveTab] = useState<'charts' | 'cards' | 'logos' | 'buttons' | 'inputs' | 'navbars' | 'tables' | 'logins' | 'signups'>('charts')
+  const [activeTab, setActiveTab] = useState<'charts' | 'cards' | 'logos' | 'buttons' | 'inputs' | 'navbars' | 'tables' | 'logins' | 'signups' | 'customPages'>('charts')
+  
+  // Load saved custom pages from localStorage
+  const [savedPages, setSavedPages] = useState<Array<{
+    id: string
+    name: string
+    description: string
+    page: Page
+    components: ComponentNode[]
+    createdAt: string
+  }>>([])
+
+  // Load saved pages from localStorage
+  const loadSavedPages = useCallback(() => {
+    try {
+      const savedPagesKey = 'savedCustomPages'
+      const pages = JSON.parse(localStorage.getItem(savedPagesKey) || '[]')
+      setSavedPages(pages)
+    } catch (error) {
+      console.error('Error loading saved pages:', error)
+      setSavedPages([])
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isOpen) {
+      loadSavedPages()
+    }
+  }, [isOpen, loadSavedPages])
+
+  // Listen for page save events to refresh the list
+  useEffect(() => {
+    const handlePageSaved = () => {
+      loadSavedPages()
+    }
+    
+    window.addEventListener('pageSaved', handlePageSaved)
+    return () => {
+      window.removeEventListener('pageSaved', handlePageSaved)
+    }
+  }, [loadSavedPages])
   
   // Initialize position to center on first open
   useEffect(() => {
@@ -6562,7 +6603,7 @@ const PreBuiltComponentsModal: React.FC<PreBuiltComponentsModalProps> = ({ isOpe
         <div className="prebuilt-components-modal-select">
           <select
             value={activeTab}
-            onChange={(e) => setActiveTab(e.target.value as 'charts' | 'cards' | 'logos' | 'buttons' | 'inputs' | 'navbars' | 'tables' | 'logins' | 'signups')}
+            onChange={(e) => setActiveTab(e.target.value as 'charts' | 'cards' | 'logos' | 'buttons' | 'inputs' | 'navbars' | 'tables' | 'logins' | 'signups' | 'customPages')}
             className="prebuilt-tab-select"
           >
             <option value="charts">Charts</option>
@@ -6574,6 +6615,7 @@ const PreBuiltComponentsModal: React.FC<PreBuiltComponentsModalProps> = ({ isOpe
             <option value="tables">Tables</option>
             <option value="logins">Login Forms</option>
             <option value="signups">Signup Forms</option>
+            <option value="customPages">Custom Pages</option>
           </select>
         </div>
         <div className="prebuilt-components-modal-content">
@@ -6605,8 +6647,124 @@ const PreBuiltComponentsModal: React.FC<PreBuiltComponentsModalProps> = ({ isOpe
             {activeTab === 'signups' && signupComponents.map((component, index) => (
               <SignupComponentItem key={`${component.type}-${component.label}-${index}`} component={component} />
             ))}
+            {activeTab === 'customPages' && (
+              savedPages.length > 0 ? (
+                savedPages.map((savedPage) => (
+                  <CustomPageItem 
+                    key={savedPage.id} 
+                    savedPage={savedPage}
+                    onDelete={(id) => {
+                      const updated = savedPages.filter(p => p.id !== id)
+                      setSavedPages(updated)
+                      localStorage.setItem('savedCustomPages', JSON.stringify(updated))
+                    }}
+                  />
+                ))
+              ) : (
+                <div style={{ 
+                  gridColumn: '1 / -1', 
+                  textAlign: 'center', 
+                  padding: '3rem',
+                  color: '#999'
+                }}>
+                  <FiFileText size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} />
+                  <p>No custom pages saved yet.</p>
+                  <p style={{ fontSize: '0.875rem', marginTop: '0.5rem' }}>
+                    Use the "Save Page" button in the navbar to save your current page.
+                  </p>
+                </div>
+              )
+            )}
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Custom Page Item Component
+interface CustomPageItemProps {
+  savedPage: {
+    id: string
+    name: string
+    description: string
+    page: Page
+    components: ComponentNode[]
+    createdAt: string
+  }
+  onDelete: (id: string) => void
+}
+
+const CustomPageItem: React.FC<CustomPageItemProps> = ({ savedPage, onDelete }) => {
+  const [{ isDragging }, drag] = useDrag({
+    type: 'component',
+    item: {
+      type: 'customPage',
+      savedPage: savedPage,
+      components: savedPage.components
+    },
+    collect: (monitor) => ({
+      isDragging: monitor.isDragging(),
+    }),
+  })
+
+  return (
+    <div
+      ref={drag}
+      className={`prebuilt-component-item ${isDragging ? 'dragging' : ''}`}
+      style={{ cursor: 'grab', position: 'relative' }}
+    >
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          if (window.confirm(`Delete "${savedPage.name}"?`)) {
+            onDelete(savedPage.id)
+          }
+        }}
+        style={{
+          position: 'absolute',
+          top: '8px',
+          right: '8px',
+          background: 'rgba(231, 76, 60, 0.9)',
+          color: 'white',
+          border: 'none',
+          borderRadius: '4px',
+          padding: '4px 8px',
+          cursor: 'pointer',
+          fontSize: '12px',
+          zIndex: 10,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px'
+        }}
+        title="Delete this saved page"
+      >
+        <FiTrash2 size={12} />
+      </button>
+      <div className="prebuilt-component-preview" style={{ 
+        pointerEvents: 'none', 
+        width: '100%', 
+        minHeight: '120px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
+        borderRadius: '8px',
+        padding: '1rem'
+      }}>
+        <FiFileText size={32} style={{ marginBottom: '0.5rem', color: '#667eea' }} />
+        <div style={{ fontSize: '12px', color: '#666', textAlign: 'center' }}>
+          {savedPage.components.length} component{savedPage.components.length !== 1 ? 's' : ''}
+        </div>
+      </div>
+      <div className="prebuilt-component-label">
+        <div style={{ fontWeight: '600', marginBottom: '4px' }}>{savedPage.name}</div>
+        {savedPage.description && (
+          <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '4px' }}>
+            {savedPage.description}
+          </div>
+        )}
       </div>
     </div>
   )

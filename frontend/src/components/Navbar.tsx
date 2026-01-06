@@ -2,9 +2,13 @@ import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../hooks/redux'
 import { logout } from '../store/slices/authSlice'
 import { createProject } from '../store/slices/projectSlice'
-import { FiLogOut, FiUser, FiHome, FiEye, FiSave, FiGrid, FiSidebar, FiUpload, FiPlus, FiX, FiPower, FiExternalLink, FiPackage, FiZap } from 'react-icons/fi'
+import { DndProvider } from 'react-dnd'
+import { HTML5Backend } from 'react-dnd-html5-backend'
+import { FiLogOut, FiUser, FiHome, FiEye, FiSave, FiGrid, FiSidebar, FiPlus, FiX, FiPower, FiExternalLink, FiPackage, FiZap, FiBookmark, FiSettings } from 'react-icons/fi'
 import { useState, useEffect, useRef } from 'react'
 import PreBuiltComponentsModal from './Editor/PreBuiltComponentsModal'
+import SettingsModal from './SettingsModal'
+import { useMessageBox } from './MessageBox'
 import './Navbar.css'
 
 const Navbar = () => {
@@ -14,6 +18,7 @@ const Navbar = () => {
   const { projectId } = useParams<{ projectId?: string }>()
   const { isAuthenticated, user } = useAppSelector((state) => state.auth)
   const { currentProject } = useAppSelector((state) => state.projects)
+  const { showMessage } = useMessageBox()
 
   const isEditorPage = location.pathname.startsWith('/editor')
   const isDashboardPage = location.pathname === '/dashboard'
@@ -33,6 +38,38 @@ const Navbar = () => {
   const [backendFramework, setBackendFramework] = useState<string>('')
   const [databaseType, setDatabaseType] = useState<string>('')
   const [databaseUrl, setDatabaseUrl] = useState<string>('')
+  const [databaseName, setDatabaseName] = useState<string>('')
+  const [databaseUsername, setDatabaseUsername] = useState<string>('')
+  const [databasePassword, setDatabasePassword] = useState<string>('')
+  const [databaseHost, setDatabaseHost] = useState<string>('localhost')
+  const [databasePort, setDatabasePort] = useState<string>('')
+  
+  // Auto-generate database URL when fields change
+  useEffect(() => {
+    if (databaseType && databaseName && databaseUsername && databaseHost) {
+      const port = databasePort || (
+        databaseType === 'postgresql' ? '5432' :
+        databaseType === 'mysql' ? '3306' :
+        databaseType === 'mongodb' ? '27017' :
+        ''
+      )
+      
+      let url = ''
+      if (databaseType === 'postgresql') {
+        url = `postgresql://${databaseUsername}${databasePassword ? ':' + databasePassword : ''}@${databaseHost}${port ? ':' + port : ''}/${databaseName}`
+      } else if (databaseType === 'mysql') {
+        url = `mysql://${databaseUsername}${databasePassword ? ':' + databasePassword : ''}@${databaseHost}${port ? ':' + port : ''}/${databaseName}`
+      } else if (databaseType === 'mongodb') {
+        url = `mongodb://${databaseUsername}${databasePassword ? ':' + databasePassword : ''}@${databaseHost}${port ? ':' + port : ''}/${databaseName}`
+      } else if (databaseType === 'sqlite') {
+        url = `sqlite:///${databaseName}`
+      }
+      
+      setDatabaseUrl(url)
+    } else {
+      setDatabaseUrl('')
+    }
+  }, [databaseType, databaseName, databaseUsername, databasePassword, databaseHost, databasePort])
   
   // State for user info popup
   const [showUserPopup, setShowUserPopup] = useState(false)
@@ -40,6 +77,12 @@ const Navbar = () => {
   
   // State for pre-built components modal
   const [showPreBuiltModal, setShowPreBuiltModal] = useState(false)
+  
+  // State for save page modal
+  const [showSavePageModal, setShowSavePageModal] = useState(false)
+  
+  // State for settings modal
+  const [showSettingsModal, setShowSettingsModal] = useState(false)
 
   // Listen for state updates from Editor
   useEffect(() => {
@@ -119,10 +162,6 @@ const Navbar = () => {
     window.dispatchEvent(new CustomEvent('gridSizeChange', { detail: { size: newSize } }))
   }
 
-  const handleUpload = () => {
-    window.dispatchEvent(new CustomEvent('openImageUpload'))
-  }
-
   const handleOpenPreBuilt = () => {
     setShowPreBuiltModal(true)
   }
@@ -147,7 +186,12 @@ const Navbar = () => {
           frontend_framework: frontendFramework || undefined,
           backend_framework: backendFramework || undefined,
           database_type: databaseType || undefined,
-          database_url: databaseUrl || undefined
+          database_url: databaseUrl || undefined,
+          database_name: databaseName || undefined,
+          database_username: databaseUsername || undefined,
+          database_password: databasePassword || undefined,
+          database_host: databaseHost || undefined,
+          database_port: databasePort || undefined
         })
       ).unwrap()
       setShowCreateModal(false)
@@ -157,6 +201,11 @@ const Navbar = () => {
       setBackendFramework('')
       setDatabaseType('')
       setDatabaseUrl('')
+      setDatabaseName('')
+      setDatabaseUsername('')
+      setDatabasePassword('')
+      setDatabaseHost('localhost')
+      setDatabasePort('')
       navigate(`/editor/${result.id}`)
     } catch (err) {
       console.error('Failed to create project:', err)
@@ -200,12 +249,23 @@ const Navbar = () => {
           {isAuthenticated ? (
             <>
               {isDashboardPage && (
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="navbar-btn navbar-btn-create"
-                >
-                  <FiPlus /> Create New Project
-                </button>
+                <>
+                  {user?.is_admin === 1 && (
+                    <button
+                      onClick={() => setShowSettingsModal(true)}
+                      className="navbar-btn navbar-btn-settings"
+                      title="No-Code Application Settings"
+                    >
+                      <FiSettings /> Settings
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowCreateModal(true)}
+                    className="navbar-btn navbar-btn-create"
+                  >
+                    <FiPlus /> Create New Project
+                  </button>
+                </>
               )}
               {isEditorPage && (
                 <div className="navbar-editor-controls">
@@ -262,11 +322,14 @@ const Navbar = () => {
                     <FiZap /> AI Assistant
                   </button>
                   <button
-                    onClick={handleUpload}
-                    className="navbar-btn navbar-btn-upload"
-                    title="Upload Dashboard Image"
+                    onClick={() => {
+                      // Dispatch event to open save page modal
+                      window.dispatchEvent(new CustomEvent('openSavePageModal'))
+                    }}
+                    className="navbar-btn"
+                    title="Save Current Page to Pre-built"
                   >
-                    <FiUpload /> Upload Image
+                    <FiBookmark /> Save Page
                   </button>
                   <button
                     onClick={handlePreview}
@@ -277,33 +340,90 @@ const Navbar = () => {
                   <button onClick={handleSave} className="navbar-btn navbar-btn-save">
                     <FiSave /> Save
                   </button>
-                  {currentProject?.application_url && (
-                    <a
-                      href={(() => {
-                        // Add auth token and cache-busting parameter to URL for preview endpoint
-                        const token = localStorage.getItem('token')
-                        if (token && currentProject?.application_url) {
-                          try {
-                            const url = new URL(currentProject.application_url, window.location.origin)
-                            url.searchParams.set('token', token)
-                            // Add timestamp to prevent caching
-                            url.searchParams.set('t', Date.now().toString())
-                            return url.toString()
-                          } catch (e) {
-                            // If URL parsing fails, just append token and timestamp
-                            return `${currentProject.application_url}?token=${encodeURIComponent(token)}&t=${Date.now()}`
-                          }
+                  {currentProject && (
+                    <button
+                      onClick={async (e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        
+                        if (!currentProject?.id) {
+                          console.error('No project ID available')
+                          return
                         }
-                        return currentProject.application_url
-                      })()}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                        
+                        const button = e.currentTarget as HTMLButtonElement
+                        const originalContent = button.innerHTML
+                        
+                        try {
+                          console.log('Starting application for project:', currentProject.id)
+                          
+                          // Show loading state
+                          button.disabled = true
+                          button.innerHTML = '<span>Starting...</span>'
+                          
+                          // Call backend to start Docker containers
+                          const token = localStorage.getItem('token')
+                          const response = await fetch(`/api/projects/${currentProject.id}/start`, {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${token}`
+                            }
+                          })
+                          
+                          if (!response.ok) {
+                            const error = await response.json()
+                            throw new Error(error.detail || 'Failed to start application')
+                          }
+                          
+                          const result = await response.json()
+                          console.log('Application start result:', result)
+                          
+                          // Show success message box with option to open application
+                          if (result.application_url) {
+                            console.log('Showing message box with URL:', result.application_url)
+                            showMessage({
+                              title: 'Application Started Successfully',
+                              message: 'Your application has been started and is ready to use. Click the button below to open it in a new tab.',
+                              type: 'success',
+                              applicationUrl: result.application_url,
+                              backendUrl: `http://localhost:${result.backend_port}`,
+                              buttonText: 'Open Application',
+                              showButton: true,
+                              onButtonClick: () => {
+                                console.log('Opening application URL:', result.application_url)
+                                // Open application in new tab when button is clicked
+                                window.open(result.application_url, '_blank', 'noopener,noreferrer')
+                              }
+                            })
+                          } else {
+                            showMessage({
+                              title: 'Application Started',
+                              message: 'Application started successfully.',
+                              type: 'success',
+                              showButton: false
+                            })
+                          }
+                        } catch (error: any) {
+                          console.error('Error starting application:', error)
+                          showMessage({
+                            title: 'Failed to Start Application',
+                            message: error.message || 'Unknown error occurred while starting the application.',
+                            type: 'error',
+                            showButton: false
+                          })
+                        } finally {
+                          // Reset button state
+                          button.disabled = false
+                          button.innerHTML = originalContent
+                        }
+                      }}
                       className="navbar-btn navbar-btn-link"
-                      title="Open Application"
-                      style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', textDecoration: 'none', padding: '0.5rem 1rem', borderRadius: '4px', background: '#667eea', color: 'white' }}
+                      title="Start and Open Application"
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', borderRadius: '4px', background: '#667eea', color: 'white', border: 'none', cursor: 'pointer' }}
                     >
                       <FiExternalLink /> Open App
-                    </a>
+                    </button>
                   )}
                 </div>
               )}
@@ -395,7 +515,8 @@ const Navbar = () => {
                 <FiX size={24} />
               </button>
             </div>
-            <form onSubmit={handleCreateProject}>
+            <div className="navbar-modal-body">
+              <form onSubmit={handleCreateProject}>
               <div className="navbar-form-group">
                 <label>Project Name</label>
                 <input
@@ -457,32 +578,76 @@ const Navbar = () => {
                 </select>
               </div>
               {databaseType && (
-                <div className="navbar-form-group">
-                  <label>Database URL</label>
-                  <input
-                    type="text"
-                    value={databaseUrl}
-                    onChange={(e) => setDatabaseUrl(e.target.value)}
-                    placeholder={
-                      databaseType === 'postgresql' 
-                        ? 'postgresql://user:password@localhost:5432/dbname'
-                        : databaseType === 'mysql'
-                        ? 'mysql://user:password@localhost:3306/dbname'
-                        : databaseType === 'sqlite'
-                        ? 'sqlite:///path/to/database.db'
-                        : databaseType === 'mongodb'
-                        ? 'mongodb://user:password@localhost:27017/dbname'
-                        : 'Enter database connection URL'
-                    }
-                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: '4px' }}
-                  />
-                  <small style={{ color: '#666', fontSize: '0.875rem', marginTop: '0.25rem', display: 'block' }}>
-                    {databaseType === 'postgresql' && 'Example: postgresql://user:password@localhost:5432/dbname'}
-                    {databaseType === 'mysql' && 'Example: mysql://user:password@localhost:3306/dbname'}
-                    {databaseType === 'sqlite' && 'Example: sqlite:///./database.db'}
-                    {databaseType === 'mongodb' && 'Example: mongodb://user:password@localhost:27017/dbname'}
-                  </small>
-                </div>
+                <>
+                  <div className="navbar-form-group">
+                    <label>Database Name</label>
+                    <input
+                      type="text"
+                      value={databaseName}
+                      onChange={(e) => setDatabaseName(e.target.value)}
+                      placeholder="Enter database name"
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div className="navbar-form-group">
+                    <label>Username</label>
+                    <input
+                      type="text"
+                      value={databaseUsername}
+                      onChange={(e) => setDatabaseUsername(e.target.value)}
+                      placeholder="Enter database username"
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div className="navbar-form-group">
+                    <label>Password</label>
+                    <input
+                      type="password"
+                      value={databasePassword}
+                      onChange={(e) => setDatabasePassword(e.target.value)}
+                      placeholder="Enter database password"
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div className="navbar-form-group">
+                    <label>Host</label>
+                    <input
+                      type="text"
+                      value={databaseHost}
+                      onChange={(e) => setDatabaseHost(e.target.value)}
+                      placeholder="localhost"
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div className="navbar-form-group">
+                    <label>Port Number</label>
+                    <input
+                      type="text"
+                      value={databasePort}
+                      onChange={(e) => setDatabasePort(e.target.value)}
+                      placeholder={
+                        databaseType === 'postgresql' ? '5432' :
+                        databaseType === 'mysql' ? '3306' :
+                        databaseType === 'mongodb' ? '27017' :
+                        'Enter port number'
+                      }
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div className="navbar-form-group">
+                    <label>Database URL (auto-generated)</label>
+                    <input
+                      type="text"
+                      value={databaseUrl}
+                      readOnly
+                      placeholder="Will be auto-generated from above fields"
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: '4px', backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
+                    />
+                    <small style={{ color: '#666', fontSize: '0.875rem', marginTop: '0.25rem', display: 'block' }}>
+                      URL is automatically generated from the fields above
+                    </small>
+                  </div>
+                </>
               )}
               <div className="navbar-modal-actions">
                 <button type="button" onClick={() => setShowCreateModal(false)}>
@@ -490,15 +655,25 @@ const Navbar = () => {
                 </button>
                 <button type="submit">Create</button>
               </div>
-            </form>
+              </form>
+            </div>
           </div>
         </div>
       )}
 
       {isEditorPage && (
-        <PreBuiltComponentsModal 
-          isOpen={showPreBuiltModal} 
-          onClose={() => setShowPreBuiltModal(false)} 
+        <DndProvider backend={HTML5Backend}>
+          <PreBuiltComponentsModal 
+            isOpen={showPreBuiltModal} 
+            onClose={() => setShowPreBuiltModal(false)} 
+          />
+        </DndProvider>
+      )}
+      
+      {showSettingsModal && (
+        <SettingsModal
+          isOpen={showSettingsModal}
+          onClose={() => setShowSettingsModal(false)}
         />
       )}
     </nav>

@@ -1,6 +1,7 @@
 import { useDrop } from 'react-dnd'
-import { ComponentNode } from '../../types/editor'
+import { ComponentNode, Page } from '../../types/editor'
 import RenderComponent from './RenderComponent'
+import { FiEdit2, FiTrash2, FiFilePlus, FiEye } from 'react-icons/fi'
 import './Canvas.css'
 
 interface CanvasProps {
@@ -12,6 +13,13 @@ interface CanvasProps {
   onAdd: (component: ComponentNode, parentId?: string) => void
   showGrid?: boolean
   gridSize?: number
+  pages?: Page[]
+  currentPageId?: string | null
+  onPageChange?: (pageId: string) => void
+  onPageRename?: (pageId: string, newName: string) => void
+  onPageDelete?: (pageId: string) => void
+  onCreatePage?: (componentId: string, pageName: string) => string
+  onOpenWorkflowViewer?: () => void
 }
 
 const Canvas = ({
@@ -20,9 +28,16 @@ const Canvas = ({
   onSelect,
   onUpdate,
   onDelete,
+  onCreatePage,
   onAdd,
   showGrid = false,
   gridSize = 20,
+  pages = [],
+  currentPageId = null,
+  onPageChange,
+  onPageRename,
+  onPageDelete,
+  onOpenWorkflowViewer,
 }: CanvasProps) => {
   // Helper function to recursively create child components
   const createChildComponents = (childrenArray: any[], parentId: string, baseTimestamp: number): ComponentNode[] => {
@@ -88,9 +103,41 @@ const Canvas = ({
 
   const [{ isOver }, drop] = useDrop({
     accept: 'component',
-    drop: (item: { type: string; props?: any }, monitor) => {
+    drop: (item: { type: string; props?: any; savedPage?: any; components?: ComponentNode[] }, monitor) => {
       // Only create root component if drop wasn't handled by a child component
       if (monitor.didDrop()) {
+        return
+      }
+      
+      // Handle custom page drop - add all components from the saved page
+      if (item.type === 'customPage' && item.components && Array.isArray(item.components)) {
+        const baseTimestamp = Date.now()
+        const componentIdMap = new Map<string, string>() // Map old IDs to new IDs
+        
+        // First pass: create all components with new IDs
+        item.components.forEach((comp, index) => {
+          const newId = `comp-${baseTimestamp}-${index}-${Math.random().toString(36).substring(7)}`
+          componentIdMap.set(comp.id, newId)
+        })
+        
+        // Second pass: add components with updated IDs and parent references
+        item.components.forEach((comp) => {
+          const newId = componentIdMap.get(comp.id)!
+          const newParentId = comp.parentId ? componentIdMap.get(comp.parentId) : undefined
+          
+          const newComponent: ComponentNode = {
+            ...comp,
+            id: newId,
+            parentId: newParentId,
+            props: {
+              ...comp.props,
+              pageId: currentPageId || undefined, // Assign to current page
+            }
+          }
+          
+          onAdd(newComponent, newParentId)
+        })
+        
         return
       }
       
@@ -139,7 +186,11 @@ const Canvas = ({
       const newComponent: ComponentNode = {
         id: `comp-${baseTimestamp}-${Math.random()}`,
         type: item.type,
-        props: newProps,
+        props: {
+          ...newProps,
+          // Assign to current page
+          pageId: currentPageId || undefined,
+        },
         children: [],
       }
       
@@ -168,7 +219,30 @@ const Canvas = ({
     }),
   })
 
-  const rootComponents = components.filter((comp) => !comp.parentId)
+  // Filter components by current page
+  const defaultPageId = pages.length > 0 ? pages[0].id : null
+  const filteredComponents = currentPageId
+    ? components.filter((comp) => {
+        // Get the page for this component
+        const componentPageId = comp.props?.pageId
+        // If component has a pageId, it must match currentPageId
+        if (componentPageId) {
+          return componentPageId === currentPageId
+        }
+        // If no pageId, it belongs to the default page (first page)
+        // So show it only if currentPageId is the default page
+        return currentPageId === defaultPageId
+      })
+    : components
+
+  const rootComponents = filteredComponents.filter((comp) => !comp.parentId)
+
+  const handlePageNameEdit = (page: Page) => {
+    const newName = prompt('Enter new page name:', page.name)
+    if (newName && newName.trim() && onPageRename) {
+      onPageRename(page.id, newName.trim())
+    }
+  }
 
   return (
     <div className="canvas-wrapper">
@@ -177,6 +251,149 @@ const Canvas = ({
           <h3>Canvas</h3>
           <span className="canvas-subtitle">Drop components here to build your page</span>
         </div>
+        {pages.length > 0 && onPageChange && (
+          <div className="canvas-page-selector">
+            <label htmlFor="page-select" style={{ fontSize: '0.75rem', color: '#666', marginRight: '0.5rem' }}>
+              Page:
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <select
+                id="page-select"
+                value={currentPageId || pages[0]?.id || ''}
+                onChange={(e) => onPageChange(e.target.value)}
+                style={{
+                  padding: '0.4rem 0.75rem',
+                  border: '1px solid #ddd',
+                  borderRadius: '6px',
+                  fontSize: '0.875rem',
+                  backgroundColor: 'white',
+                  cursor: 'pointer',
+                  minWidth: '150px'
+                }}
+              >
+                {pages.map((page) => (
+                  <option key={page.id} value={page.id}>
+                    {page.name}
+                  </option>
+                ))}
+              </select>
+              {currentPageId && onPageRename && (
+                <button
+                  onClick={() => {
+                    const page = pages.find(p => p.id === currentPageId)
+                    if (page) handlePageNameEdit(page)
+                  }}
+                  style={{
+                    padding: '0.4rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '6px',
+                    backgroundColor: 'white',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Rename page"
+                >
+                  <FiEdit2 size={14} />
+                </button>
+              )}
+              {currentPageId && onPageDelete && (
+                <button
+                  onClick={() => {
+                    if (pages.length <= 1) {
+                      return // Don't allow deleting the last page
+                    }
+                    const page = pages.find(p => p.id === currentPageId)
+                    if (page && onPageDelete) {
+                      if (window.confirm(`Are you sure you want to delete page "${page.name}"? This will also delete all components on this page.`)) {
+                        onPageDelete(currentPageId)
+                      }
+                    }
+                  }}
+                  disabled={pages.length <= 1}
+                  style={{
+                    padding: '0.4rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '6px',
+                    backgroundColor: pages.length <= 1 ? '#f5f5f5' : 'white',
+                    cursor: pages.length <= 1 ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: pages.length <= 1 ? '#999' : '#e74c3c',
+                    opacity: pages.length <= 1 ? 0.5 : 1
+                  }}
+                  title={pages.length <= 1 ? 'Cannot delete the last page' : 'Delete page'}
+                >
+                  <FiTrash2 size={14} />
+                </button>
+              )}
+              {onCreatePage && (
+                <button
+                  onClick={() => {
+                    const pageName = prompt('Enter page name:')
+                    if (pageName && pageName.trim()) {
+                      // Create page with empty componentId (not linking to any component)
+                      onCreatePage('', pageName.trim())
+                    }
+                  }}
+                  style={{
+                    padding: '0.4rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '6px',
+                    backgroundColor: '#667eea',
+                    color: 'white',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all 0.2s'
+                  }}
+                  title="Create new page"
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#5568d3'
+                    e.currentTarget.style.transform = 'scale(1.05)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '#667eea'
+                    e.currentTarget.style.transform = 'scale(1)'
+                  }}
+                >
+                  <FiFilePlus size={14} />
+                </button>
+              )}
+              {onOpenWorkflowViewer && (
+                <button
+                  onClick={onOpenWorkflowViewer}
+                  style={{
+                    padding: '0.4rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '6px',
+                    backgroundColor: '#10b981',
+                    color: 'white',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all 0.2s'
+                  }}
+                  title="View application workflow"
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#059669'
+                    e.currentTarget.style.transform = 'scale(1.05)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '#10b981'
+                    e.currentTarget.style.transform = 'scale(1)'
+                  }}
+                >
+                  <FiEye size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
       <div
         ref={drop}
@@ -202,7 +419,7 @@ const Canvas = ({
               <RenderComponent
                 key={component.id}
                 component={component}
-                allComponents={components}
+                allComponents={filteredComponents}
                 selectedId={selectedId}
                 onSelect={onSelect}
                 onUpdate={onUpdate}

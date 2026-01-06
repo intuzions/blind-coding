@@ -30,8 +30,11 @@
   border-radius: 20px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3), 0 8px 32px rgba(0, 0, 0, 0.15);
   width: 100%;
-  max-width: 480px;
+  max-width: 600px;
+  max-height: 90vh;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   animation: slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border: 1px solid rgba(255, 255, 255, 0.3);
 }
@@ -107,6 +110,9 @@
 
 .confirmation-modal-body {
   padding: 28px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .confirmation-modal-message {

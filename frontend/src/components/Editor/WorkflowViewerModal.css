@@ -1,0 +1,463 @@
+.workflow-viewer-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10002;
+  backdrop-filter: blur(4px);
+}
+
+.workflow-viewer-modal {
+  background: white;
+  border-radius: 12px;
+  width: 90vw;
+  height: 85vh;
+  max-width: 1400px;
+  max-height: 900px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.workflow-viewer-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e0e0e0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.workflow-viewer-modal-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.workflow-viewer-modal-close {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.workflow-viewer-modal-close:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.workflow-viewer-tabs {
+  display: flex;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f8f9fa;
+}
+
+.workflow-tab-button {
+  flex: 1;
+  padding: 12px 24px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #666;
+  transition: all 0.2s;
+  border-bottom: 2px solid transparent;
+}
+
+.workflow-tab-button:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.workflow-tab-button.active {
+  color: #667eea;
+  border-bottom-color: #667eea;
+  background: white;
+}
+
+.workflow-viewer-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.workflow-canvas-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workflow-toolbar {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f8f9fa;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.workflow-page-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+.workflow-toolbox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  flex: 1;
+}
+
+.toolbox-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #666;
+  white-space: nowrap;
+}
+
+.toolbox-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.toolbox-btn {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: white;
+  color: #333;
+  cursor: pointer;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.toolbox-btn:hover {
+  background: #f0f0f0;
+  border-color: #667eea;
+}
+
+.toolbox-btn.active {
+  background: #667eea;
+  color: white;
+  border-color: #667eea;
+}
+
+.toolbox-btn span {
+  font-size: 0.75rem;
+}
+
+.workflow-tool-btn {
+  padding: 8px 16px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: white;
+  color: #333;
+  cursor: pointer;
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.workflow-tool-btn:hover {
+  background: #f0f0f0;
+  border-color: #667eea;
+}
+
+.workflow-tool-btn.active {
+  background: #667eea;
+  color: white;
+  border-color: #667eea;
+}
+
+.workflow-save-btn {
+  background: #10b981 !important;
+  color: white !important;
+  border-color: #10b981 !important;
+}
+
+.workflow-save-btn:hover {
+  background: #059669 !important;
+  border-color: #059669 !important;
+}
+
+.workflow-canvas {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  background: #fafafa;
+  background-image: 
+    linear-gradient(rgba(0, 0, 0, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.05) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.workflow-connections-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.workflow-component-node {
+  position: absolute;
+  width: 200px;
+  min-height: 80px;
+  background: white;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  cursor: grab;
+  z-index: 2;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.workflow-component-node:hover {
+  border-color: #667eea;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+  transform: translateY(-2px);
+}
+
+.workflow-component-node.connecting {
+  border-color: #667eea;
+  background: #f0f4ff;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2);
+}
+
+.workflow-component-node.dragging {
+  cursor: grabbing;
+  opacity: 0.8;
+  z-index: 10;
+}
+
+.workflow-component-node-header {
+  padding: 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 6px 6px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-transform: capitalize;
+}
+
+.workflow-component-node-body {
+  padding: 12px;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.workflow-component-id {
+  color: #999;
+  font-size: 0.75rem;
+  margin-bottom: 4px;
+  font-family: monospace;
+}
+
+.workflow-component-content {
+  color: #666;
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+
+/* Connection Points */
+.connection-point {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: #667eea;
+  border: 2px solid white;
+  border-radius: 50%;
+  cursor: crosshair;
+  z-index: 1000;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  opacity: 0.3;
+  pointer-events: all;
+}
+
+.connection-point.visible {
+  opacity: 1;
+  background: #667eea;
+}
+
+.connection-point:hover {
+  opacity: 1 !important;
+  background: #5568d3;
+  transform: scale(1.3);
+  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+}
+
+.connection-point:hover {
+  background: #5568d3;
+  transform: scale(1.3);
+  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+}
+
+.connection-point.active {
+  background: #10b981;
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.3);
+  transform: scale(1.2);
+}
+
+.connection-point-top {
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.connection-point-bottom {
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.connection-point-left {
+  left: -6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.connection-point-right {
+  right: -6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.connection-point.active.connection-point-top {
+  transform: translateX(-50%) scale(1.2);
+}
+
+.connection-point.active.connection-point-bottom {
+  transform: translateX(-50%) scale(1.2);
+}
+
+.connection-point.active.connection-point-left {
+  transform: translateY(-50%) scale(1.2);
+}
+
+.connection-point.active.connection-point-right {
+  transform: translateY(-50%) scale(1.2);
+}
+
+.user-flow-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.user-flow-info {
+  margin-bottom: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.user-flow-info h3 {
+  margin: 0 0 8px 0;
+  color: #333;
+}
+
+.user-flow-info p {
+  margin: 0;
+  color: #666;
+  line-height: 1.6;
+}
+
+.user-flow-diagram {
+  margin-top: 24px;
+}
+
+.empty-flow {
+  text-align: center;
+  padding: 3rem;
+  color: #999;
+}
+
+.flow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.flow-step {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.flow-step-number {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.flow-step-content {
+  flex: 1;
+}
+
+.flow-step-content h4 {
+  margin: 0 0 4px 0;
+  color: #333;
+  font-size: 1rem;
+}
+
+.flow-step-content p {
+  margin: 0;
+  color: #666;
+  font-size: 0.875rem;
+}
+
+.flow-step-arrow {
+  color: #667eea;
+  flex-shrink: 0;
+}
+

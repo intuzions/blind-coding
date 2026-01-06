@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from app.routers import auth, projects, image_analysis, ai_assistant, ai_development
+from app.routers import auth, projects, image_analysis, ai_assistant, ai_development, settings
 import logging
 import traceback
 
@@ -38,6 +38,7 @@ app.include_router(projects.router)
 app.include_router(image_analysis.router)
 app.include_router(ai_assistant.router)
 app.include_router(ai_development.router)
+app.include_router(settings.router)
 
 @app.get("/")
 def read_root():

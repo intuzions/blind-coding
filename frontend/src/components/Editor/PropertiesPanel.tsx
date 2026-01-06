@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useDrag, useDrop } from 'react-dnd'
-import { ComponentNode } from '../../types/editor'
-import { FiTrash2 } from 'react-icons/fi'
+import { ComponentNode, Page } from '../../types/editor'
+import { FiTrash2, FiChevronRight, FiChevronDown, FiCopy } from 'react-icons/fi'
 import { useConfirmation } from '../ConfirmationModal'
-import { aiAssistantAPI } from '../../api/aiAssistant'
+import { aiAssistantAPI, ActionResponse, FormAPIRequest } from '../../api/aiAssistant'
+import { aiDevelopmentAPI } from '../../api/aiDevelopment'
 import { useToast } from '../Toast'
 import './PropertiesPanel.css'
 
@@ -13,7 +14,11 @@ interface PropertiesPanelProps {
   onUpdate: (id: string, updates: Partial<ComponentNode>) => void
   onSelect: (id: string | null) => void
   onDelete: (id: string) => void
-  onAddComponent?: (component: ComponentNode) => void
+  onAddComponent?: (component: ComponentNode, parentId?: string) => void
+  onReorder?: (draggedId: string, targetId: string, position: 'before' | 'after' | 'inside') => void
+  pages?: Page[]
+  currentPageId?: string | null
+  projectId?: number
 }
 
 // Parse value and unit from a string like "100px" or "50%"
@@ -162,21 +167,77 @@ const ComponentTree = ({
   selectedId, 
   onSelect,
   onDelete,
-  onUpdate
+  onUpdate,
+  onReorder
 }: { 
   components: ComponentNode[]
   selectedId: string | null
   onSelect: (id: string | null) => void
   onDelete: (id: string) => void
   onUpdate: (id: string, updates: Partial<ComponentNode>) => void
+  onReorder?: (draggedId: string, targetId: string, position: 'before' | 'after' | 'inside') => void
 }) => {
+  // Helper to reorder components
+  const reorderComponent = (draggedId: string, targetId: string, position: 'before' | 'after' | 'inside') => {
+    if (onReorder) {
+      onReorder(draggedId, targetId, position)
+      return
+    }
+    
+    // Fallback: if no onReorder callback, just reparent
+    const dragged = components.find(c => c.id === draggedId)
+    const target = components.find(c => c.id === targetId)
+    
+    if (!dragged || !target) return
+    
+    // If dropping inside, just reparent
+    if (position === 'inside') {
+      onUpdate(draggedId, { parentId: targetId })
+      return
+    }
+    
+    // For reordering without onReorder, we'll just reparent to the same parent
+    // The actual reordering will be handled by the Editor component
+    const targetParentId = target.parentId
+    if (dragged.parentId !== targetParentId) {
+      onUpdate(draggedId, { parentId: targetParentId })
+    }
+  }
   const { confirm } = useConfirmation()
   const selectedNodeRef = useRef<HTMLDivElement | null>(null)
   const treeContainerRef = useRef<HTMLDivElement | null>(null)
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
 
-  // Scroll selected node into view when selectedId changes
+  // Auto-expand path to selected component and scroll into view
   useEffect(() => {
-    if (selectedId && selectedNodeRef.current && treeContainerRef.current) {
+    if (selectedId) {
+      // Find all parent components and expand them
+      const parentIds: string[] = []
+      let currentId: string | undefined = selectedId
+      
+      // Collect all parent IDs
+      while (currentId) {
+        const component = components.find(c => c.id === currentId)
+        if (component && component.parentId) {
+          parentIds.push(component.parentId)
+          currentId = component.parentId
+        } else {
+          break
+        }
+      }
+      
+      // Expand all parents
+      if (parentIds.length > 0) {
+        setExpandedNodes(prev => {
+          const newSet = new Set(prev)
+          parentIds.forEach(id => newSet.add(id))
+          return newSet
+        })
+      }
+      
+      // Scroll selected node into view
+      setTimeout(() => {
+        if (selectedNodeRef.current && treeContainerRef.current) {
       const node = selectedNodeRef.current
       const container = treeContainerRef.current
       
@@ -200,7 +261,9 @@ const ComponentTree = ({
         })
       }
     }
-  }, [selectedId])
+      }, 100) // Small delay to allow DOM to update after expansion
+    }
+  }, [selectedId, components])
 
   const handleDelete = (e: React.MouseEvent, componentId: string) => {
     e.stopPropagation()
@@ -216,10 +279,25 @@ const ComponentTree = ({
     })
   }
 
+  // Toggle expand/collapse for a node
+  const toggleExpand = (componentId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setExpandedNodes(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(componentId)) {
+        newSet.delete(componentId)
+      } else {
+        newSet.add(componentId)
+      }
+      return newSet
+    })
+  }
+
   // Tree node component with drag and drop
-  const TreeNode = ({ component, level }: { component: ComponentNode; level: number; parentId?: string | undefined }) => {
+  const TreeNode = ({ component, level, index, siblingsCount }: { component: ComponentNode; level: number; parentId?: string | undefined; index?: number; siblingsCount?: number }) => {
     const hasChildren = components.some(c => c.parentId === component.id)
     const isSelected = selectedId === component.id
+    const isExpanded = expandedNodes.has(component.id)
     
     // Make this node draggable
     const [{ isDragging }, drag] = useDrag({
@@ -233,7 +311,20 @@ const ComponentTree = ({
       }),
     })
 
-    // Make this node accept drops
+    // Drop zone before this component (for reordering)
+    const [{ isOverBefore }, dropBefore] = useDrop({
+      accept: 'tree-component',
+      drop: (item: { componentId: string; componentType: string }) => {
+        if (item.componentId !== component.id) {
+          reorderComponent(item.componentId, component.id, 'before')
+        }
+      },
+      collect: (monitor) => ({
+        isOverBefore: monitor.isOver() && monitor.canDrop(),
+      }),
+    })
+
+    // Drop zone on this component (for reparenting)
     const [{ isOver }, drop] = useDrop({
       accept: 'tree-component',
       drop: (item: { componentId: string; componentType: string }, monitor) => {
@@ -264,22 +355,73 @@ const ComponentTree = ({
       }),
     })
 
+    // Drop zone after this component (for reordering)
+    const [{ isOverAfter }, dropAfter] = useDrop({
+      accept: 'tree-component',
+      drop: (item: { componentId: string; componentType: string }) => {
+        if (item.componentId !== component.id) {
+          reorderComponent(item.componentId, component.id, 'after')
+        }
+      },
+      collect: (monitor) => ({
+        isOverAfter: monitor.isOver() && monitor.canDrop(),
+      }),
+    })
+
     // Combine drag and drop refs
     const dragDropRef = (node: HTMLDivElement | null) => {
       drag(node)
       drop(node)
     }
+    
+    const dropBeforeRef = (node: HTMLDivElement | null) => {
+      dropBefore(node)
+    }
+    
+    const dropAfterRef = (node: HTMLDivElement | null) => {
+      dropAfter(node)
+    }
 
     return (
       <li key={component.id} className="tree-item">
+        {/* Drop zone before this component */}
+        {index !== undefined && index > 0 && (
+          <div
+            ref={dropBeforeRef}
+            className={`tree-drop-zone ${isOverBefore ? 'drag-over' : ''}`}
+            style={{ height: '4px', margin: '2px 0' }}
+          />
+        )}
+        
         <div
           ref={isSelected ? selectedNodeRef : null}
           className={`tree-node ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isOver ? 'drag-over' : ''}`}
           onClick={() => onSelect(component.id)}
           style={{ paddingLeft: `${level * 0.5}rem` }}
         >
-          <div ref={dragDropRef} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, cursor: 'move' }}>
-            <span className="tree-icon">{hasChildren ? '📁' : '📄'}</span>
+          <div ref={dragDropRef} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, cursor: 'move', minWidth: 0, overflow: 'hidden' }}>
+            {hasChildren ? (
+              <button
+                className="tree-expand-btn"
+                onClick={(e) => toggleExpand(component.id, e)}
+                title={isExpanded ? 'Collapse' : 'Expand'}
+                style={{ 
+                  background: 'none', 
+                  border: 'none', 
+                  cursor: 'pointer', 
+                  padding: '0.25rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  color: '#666',
+                  flexShrink: 0
+                }}
+              >
+                {isExpanded ? <FiChevronDown /> : <FiChevronRight />}
+              </button>
+            ) : (
+              <span style={{ width: '1.5rem', display: 'inline-block', flexShrink: 0 }}></span>
+            )}
+            <span className="tree-icon" style={{ flexShrink: 0 }}>{hasChildren ? '📁' : '📄'}</span>
             <span className="tree-label">
               <strong title={component.type}>
                 {component.type.length > 15 ? `${component.type.substring(0, 15)}...` : component.type}
@@ -296,7 +438,17 @@ const ComponentTree = ({
             <FiTrash2 />
           </button>
         </div>
-        {hasChildren && renderTree(component.id, level + 1)}
+        
+        {/* Drop zone after this component */}
+        {index !== undefined && index < (siblingsCount || 0) - 1 && (
+          <div
+            ref={dropAfterRef}
+            className={`tree-drop-zone ${isOverAfter ? 'drag-over' : ''}`}
+            style={{ height: '4px', margin: '2px 0' }}
+          />
+        )}
+        
+        {hasChildren && isExpanded && renderTree(component.id, level + 1)}
       </li>
     )
   }
@@ -315,12 +467,14 @@ const ComponentTree = ({
 
     return (
       <ul className="tree-list" style={{ paddingLeft: level > 0 ? '1rem' : '0' }}>
-        {children.map(component => (
+        {children.map((component, index) => (
           <TreeNode 
             key={component.id}
             component={component}
             level={level}
             parentId={parentId}
+            index={index}
+            siblingsCount={children.length}
           />
         ))}
       </ul>
@@ -337,10 +491,14 @@ const ComponentTree = ({
   )
 }
 
-const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect, onDelete, onAddComponent }: PropertiesPanelProps) => {
+const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect, onDelete, onAddComponent, onReorder, pages = [], currentPageId, projectId }: PropertiesPanelProps) => {
   const { confirm } = useConfirmation()
   const [localProps, setLocalProps] = useState<any>({})
-  const [activeTab, setActiveTab] = useState<'tree' | 'style' | 'ai'>('style')
+  const [activeTab, setActiveTab] = useState<'tree' | 'properties' | 'style' | 'css' | 'ai'>('style')
+  const [actionMessage, setActionMessage] = useState<string>('')
+  const [actionProcessing, setActionProcessing] = useState<boolean>(false)
+  const [actionResponse, setActionResponse] = useState<ActionResponse | null>(null)
+  const [formAPIProcessing, setFormAPIProcessing] = useState<boolean>(false)
   const [numericValues, setNumericValues] = useState<{ [key: string]: { value: number; unit: string } }>({})
   const [styleSearchQuery, setStyleSearchQuery] = useState('')
   const [expandedShorthand, setExpandedShorthand] = useState<{ [key: string]: boolean }>({})
@@ -348,10 +506,24 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
   const [aiPrompt, setAiPrompt] = useState<string>('')
   const [aiProcessing, setAiProcessing] = useState<boolean>(false)
   const [aiMessages, setAiMessages] = useState<Array<{ type: 'user' | 'assistant'; content: string; timestamp: Date; applied?: boolean }>>([])
+  const [backgroundType, setBackgroundType] = useState<'solid' | 'gradient'>('solid')
+  const [gradientDirection, setGradientDirection] = useState('180deg')
+  const [gradientColors, setGradientColors] = useState<Array<{color: string, stop: string}>>([
+    { color: '#ffffff', stop: '0%' },
+    { color: '#000000', stop: '100%' }
+  ])
   const { showToast } = useToast()
+  
+  // Track last synced component to prevent resetting during edits
+  const lastSyncedComponentIdRef = useRef<string | null>(null)
+  // Track if we're actively editing a gradient to prevent useEffect from resetting
+  const isEditingGradientRef = useRef<boolean>(false)
   
   // Auto-scroll to bottom when new messages arrive (must be before any conditional returns)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  
+  // Track recent prompts to avoid repeated confirmations (must be before early returns)
+  const recentPromptsRef = useRef<Array<{ prompt: string; timestamp: number }>>([])
   
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -559,13 +731,35 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
     })
   }
   
+  // Utility function to sort search results: items starting with query come first
+  // This can be reused for any search/filter operation
+  const sortByStartsWith = <T,>(items: T[], query: string, getValue: (item: T) => string): T[] => {
+    const queryLower = query.toLowerCase().trim()
+    return [...items].sort((a, b) => {
+      const aValue = getValue(a).toLowerCase()
+      const bValue = getValue(b).toLowerCase()
+      const aStartsWith = aValue.startsWith(queryLower)
+      const bStartsWith = bValue.startsWith(queryLower)
+      
+      // Items starting with query come first
+      if (aStartsWith && !bStartsWith) return -1
+      if (!aStartsWith && bStartsWith) return 1
+      
+      // Then alphabetical within the same group
+      return aValue.localeCompare(bValue)
+    })
+  }
+  
   // Filter properties based on search query
   const getFilteredProperties = () => {
     const setProps = getSetProperties()
     
     if (!styleSearchQuery.trim()) {
-      // Show only set properties when no search
-      return setProps
+      // Show all CSS properties when no search (onload) - in alphabetical order
+      // Exclude "opacity" from the default list
+      return [...allCSSProperties]
+        .filter(prop => prop.toLowerCase() !== 'opacity')
+        .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
     }
     
     // When searching, show matching properties from all CSS properties
@@ -573,6 +767,21 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
     const matchingProps = allCSSProperties.filter(prop => 
       prop.toLowerCase().includes(query)
     )
+    
+    // Sort matching properties: those starting with query come first, then alphabetical
+    matchingProps.sort((a, b) => {
+      const aLower = a.toLowerCase()
+      const bLower = b.toLowerCase()
+      const aStartsWith = aLower.startsWith(query)
+      const bStartsWith = bLower.startsWith(query)
+      
+      // Properties starting with query come first
+      if (aStartsWith && !bStartsWith) return -1
+      if (!aStartsWith && bStartsWith) return 1
+      
+      // Within the same group (both start or both don't), sort alphabetically
+      return aLower.localeCompare(bLower)
+    })
     
     // Find shorthand properties that match the search
     const matchingShorthands = matchingProps.filter(prop => isShorthandProperty(prop))
@@ -630,62 +839,98 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
       })
     }
     
-    // Combine set properties, matching properties, and related properties
-    const combined = [...new Set([...setProps, ...matchingProps, ...Array.from(relatedPropsSet)])]
+    // Filter setProps to only include those that match the query directly
+    // Don't include set properties that don't match the query, even if they're related
+    // Also exclude "opacity" to prevent duplicates
+    const matchingSetProps = setProps.filter(prop => {
+      const propLower = prop.toLowerCase()
+      
+      // Exclude "opacity" from set properties to prevent duplicates
+      if (propLower === 'opacity') {
+        return false
+      }
+      
+      // ONLY include if it matches the query directly
+      // This prevents properties like "opacity" from appearing when searching for something else
+      return propLower.includes(query)
+    })
     
-    // Filter to show all matching properties and related properties as separate items
+    // Filter relatedPropsSet to only include properties that actually match the query or are for border/radius searches
+    // Exclude "opacity" to prevent duplicates
+    const filteredRelatedProps = Array.from(relatedPropsSet).filter(prop => {
+      const propLower = prop.toLowerCase()
+      
+      // Exclude "opacity" from related props to prevent duplicates
+      if (propLower === 'opacity') {
+        return false
+      }
+      
+      // Only include if it matches the query, or if it's for border/radius searches
+      if (query.includes('border') && propLower.includes('border')) return true
+      if (query.includes('radius') && propLower.includes('radius')) return true
+      if (propLower.includes(query)) return true
+      return false
+    })
+    
+    // Combine: first matching properties (already sorted by "starts with"), then matching set props, then filtered related props
+    // This ensures properties starting with query appear first regardless of whether they're set or not
+    // Use a Set immediately to prevent any duplicates from being added
+    const combinedSet = new Set<string>()
+    matchingProps.forEach(prop => combinedSet.add(prop))
+    matchingSetProps.forEach(prop => combinedSet.add(prop))
+    filteredRelatedProps.forEach(prop => combinedSet.add(prop))
+    const combined = Array.from(combinedSet)
+    
+    // Filter to show ONLY properties that match the query
+    // This ensures properties like "opacity" don't appear unless they match the search
     let filtered = combined.filter(prop => {
       const propLower = prop.toLowerCase()
       
-      // For border searches, show ALL border-related properties separately
+      // For border searches, show ONLY border-related properties
       if (query.includes('border')) {
-        if (propLower.includes('border')) {
-          return true
+        return propLower.includes('border')
         }
+      
+      // For radius searches, show ONLY radius-related properties
+      if (query.includes('radius')) {
+        return propLower.includes('radius')
       }
       
-      // Show if it matches the query directly
+      // For all other searches, show ONLY properties that match the query directly
+      // This is the primary and most important filter
       if (propLower.includes(query)) {
         return true
       }
       
-      // Show if it's a related property of a matching shorthand (list separately)
-      for (const shorthand of matchingShorthands) {
-        const related = getRelatedProperties(shorthand)
-        if (related.includes(prop)) {
-          return true
-        }
-      }
-      
-      // Show if it's in the related props set (for border/radius searches)
-      if (relatedPropsSet.has(prop)) {
-        return true
-      }
-      
+      // Don't show properties that don't match the query
       return false
     })
     
     // Remove duplicates but keep all properties as separate items
-    const uniqueFiltered = [...new Set(filtered)]
+    // Use a Set to ensure no duplicates, then convert back to array
+    const uniqueFiltered = Array.from(new Set(filtered))
     
-    // Sort to show main properties first, then related properties
+    // Sort: 1) Properties starting with query come first, 2) Then all in ascending alphabetical order
+    // This applies to ALL filtered results (matching props, set props, related props, etc.)
     const sorted = uniqueFiltered.sort((a, b) => {
-      const aIsShorthand = isShorthandProperty(a)
-      const bIsShorthand = isShorthandProperty(b)
+      const aLower = a.toLowerCase()
+      const bLower = b.toLowerCase()
+      const aStartsWith = aLower.startsWith(query)
+      const bStartsWith = bLower.startsWith(query)
       
-      // Shorthand properties come first
-      if (aIsShorthand && !bIsShorthand) return -1
-      if (!aIsShorthand && bIsShorthand) return 1
+      // FIRST PRIORITY: Properties starting with query come first
+      if (aStartsWith && !bStartsWith) return -1
+      if (!aStartsWith && bStartsWith) return 1
       
-      // Then alphabetical
-      return a.localeCompare(b)
+      // SECOND PRIORITY: Alphabetical order (ascending) within the same group
+      return aLower.localeCompare(bLower)
     })
     
     return sorted
   }
   
   const setProperties = useMemo(() => getSetProperties(), [localProps.style])
-  const filteredProperties = useMemo(() => getFilteredProperties(), [styleSearchQuery, setProperties])
+  const filteredProperties = useMemo(() => getFilteredProperties(), [styleSearchQuery, setProperties, allCSSProperties])
   const showSearchResults = styleSearchQuery.trim().length > 0
 
   // Determine if a CSS property accepts color values
@@ -930,8 +1175,85 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
       const props = selectedComponent.props || {}
       setLocalProps(props)
       
-      // Initialize numeric values from style for all numeric properties
+      // Get style object (needed for both gradient sync and numeric values initialization)
       const style = props.style || {}
+      
+      // Sync gradient state after localProps is set
+      // Always sync based on the actual saved value to ensure gradients are restored after page reload
+      const bgValue = style.backgroundColor || style.background || ''
+      const isGradient = typeof bgValue === 'string' && bgValue.includes('linear-gradient')
+      
+      // Helper function to parse and set gradient
+      const parseAndSetGradient = (gradientValue: string) => {
+        const match = gradientValue.match(/linear-gradient\s*\(\s*([^)]+)\s*\)/i)
+        if (match) {
+          const gradientContent = match[1].trim()
+          const parts: string[] = []
+          let currentPart = ''
+          let parenDepth = 0
+          
+          for (let i = 0; i < gradientContent.length; i++) {
+            const char = gradientContent[i]
+            if (char === '(') parenDepth++
+            if (char === ')') parenDepth--
+            
+            if (char === ',' && parenDepth === 0) {
+              if (currentPart.trim()) {
+                parts.push(currentPart.trim())
+                currentPart = ''
+              }
+            } else {
+              currentPart += char
+            }
+          }
+          if (currentPart.trim()) {
+            parts.push(currentPart.trim())
+          }
+          
+          const direction = parts[0] && (parts[0].includes('deg') || parts[0].includes('to ')) 
+            ? parts[0] 
+            : '180deg'
+          const colorParts = parts.length > 1 ? parts.slice(1) : parts
+          
+          const colors = colorParts.map((c: string) => {
+            const trimmed = c.trim()
+            const stopMatch = trimmed.match(/(.+?)\s+(\d+%?)$/)
+            if (stopMatch) {
+              return {
+                color: stopMatch[1].trim(),
+                stop: stopMatch[2].trim()
+              }
+            }
+            return { color: trimmed, stop: '' }
+          })
+          
+          if (colors.length > 0) {
+            setGradientDirection(direction)
+            setGradientColors(colors)
+          }
+        }
+      }
+      
+      // Always sync when component ID changes
+      // This ensures gradients are properly restored after page reload
+      const componentChanged = lastSyncedComponentIdRef.current !== selectedComponent.id
+      
+      if (componentChanged) {
+        lastSyncedComponentIdRef.current = selectedComponent.id
+        
+        // Always sync gradient state based on actual value
+        if (isGradient) {
+          setBackgroundType('gradient')
+          parseAndSetGradient(bgValue)
+        } else if (bgValue && (typeof bgValue === 'string' && (bgValue.match(/^#[0-9a-f]{3,6}$/i) || bgValue.match(/^rgb\(/) || bgValue.match(/^rgba\(/)))) {
+          // Only set to solid if we have a clear solid color value
+          // Don't reset if bgValue is empty - preserve user's selection
+          setBackgroundType('solid')
+        }
+        // If bgValue is empty, don't change backgroundType - preserve user's selection
+      }
+      
+      // Initialize numeric values from style for all numeric properties
       const newNumericValues: { [key: string]: { value: number; unit: string } } = {}
       
       // Initialize all numeric properties that are set
@@ -977,11 +1299,112 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
     } else {
       // Clear numeric values when no component is selected
       setNumericValues({})
+      // Reset ref when component is deselected to ensure sync on next selection
+      lastSyncedComponentIdRef.current = null
     }
     
     // Reset selected action when component changes
     setSelectedAction('')
-  }, [selectedComponent?.id, selectedComponent?.props?.style]) // Also run when style changes
+  }, [selectedComponent?.id, selectedComponent]) // Run when component ID or component object changes
+  
+  // Separate effect to always sync gradient state based on actual saved value
+  // This ensures gradients are restored even if the component object reference doesn't change
+  // This effect runs whenever the component or its background value changes
+  useEffect(() => {
+    if (!selectedComponent) {
+      // Reset to solid when no component is selected
+      if (backgroundType !== 'solid') {
+        setBackgroundType('solid')
+      }
+      return
+    }
+    
+    // Check both selectedComponent.props (saved value) and localProps (live edits)
+    // This ensures we detect gradients even during active editing
+    const componentStyle = selectedComponent.props?.style || {}
+    const localStyle = localProps.style || {}
+    const bgValue = localStyle.backgroundColor || localStyle.background || componentStyle.backgroundColor || componentStyle.background || ''
+    const isGradient = typeof bgValue === 'string' && bgValue.includes('linear-gradient')
+    
+    // Always sync gradient state if we detect a gradient value
+    // This ensures gradients are restored after page reload
+    if (isGradient) {
+      // Always update to gradient if we detect a gradient value (even if already gradient)
+      // This ensures the state is correct after page reload
+      setBackgroundType('gradient')
+      
+      // Don't parse/update colors if we're actively editing (to avoid conflicts)
+      // But always parse on component selection to restore saved gradients
+      if (isEditingGradientRef.current) {
+        return
+      }
+      
+      // Always parse and set gradient colors/direction to ensure they're correct
+      const match = bgValue.match(/linear-gradient\s*\(\s*([^)]+)\s*\)/i)
+      if (match) {
+        const gradientContent = match[1].trim()
+        const parts: string[] = []
+        let currentPart = ''
+        let parenDepth = 0
+        
+        for (let i = 0; i < gradientContent.length; i++) {
+          const char = gradientContent[i]
+          if (char === '(') parenDepth++
+          if (char === ')') parenDepth--
+          
+          if (char === ',' && parenDepth === 0) {
+            if (currentPart.trim()) {
+              parts.push(currentPart.trim())
+              currentPart = ''
+            }
+          } else {
+            currentPart += char
+          }
+        }
+        if (currentPart.trim()) {
+          parts.push(currentPart.trim())
+        }
+        
+        const direction = parts[0] && (parts[0].includes('deg') || parts[0].includes('to ')) 
+          ? parts[0] 
+          : '180deg'
+        const colorParts = parts.length > 1 ? parts.slice(1) : parts
+        
+        const colors = colorParts.map((c: string) => {
+          const trimmed = c.trim()
+          const stopMatch = trimmed.match(/(.+?)\s+(\d+%?)$/)
+          if (stopMatch) {
+            return {
+              color: stopMatch[1].trim(),
+              stop: stopMatch[2].trim()
+            }
+          }
+          return { color: trimmed, stop: '' }
+        })
+        
+        if (colors.length > 0) {
+          setGradientDirection(direction)
+          setGradientColors(colors)
+        }
+      }
+    } else if (!isGradient) {
+      // Only reset to solid if:
+      // 1. We're NOT actively editing a gradient (to prevent resetting during edits)
+      // 2. We have a clear solid color value (not empty, not gradient)
+      // 3. We're currently in gradient mode (user explicitly switched)
+      // This prevents resetting when bgValue is empty or during active editing
+      if (!isEditingGradientRef.current) {
+        if (backgroundType === 'gradient' && bgValue && (bgValue.match(/^#[0-9a-f]{3,6}$/i) || bgValue.match(/^rgb\(/) || bgValue.match(/^rgba\(/))) {
+          // Only reset to solid if we have a clear solid color value AND we're in gradient mode
+          // This handles the case where user explicitly switches from gradient to solid
+          setBackgroundType('solid')
+        }
+        // Don't reset if bgValue is empty - preserve user's selection
+        // Don't reset if we're already solid - no need to update
+      }
+    }
+    // Don't reset if backgroundType is already 'solid' and value is empty or solid - preserve user's selection
+  }, [selectedComponent?.id, selectedComponent?.props?.style?.backgroundColor, selectedComponent?.props?.style?.background, localProps.style?.backgroundColor, localProps.style?.background])
 
   if (!selectedComponent) {
     return (
@@ -994,10 +1417,28 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
             Tree
           </button>
           <button
+            className={`tab-button ${activeTab === 'properties' ? 'active' : ''}`}
+            onClick={() => setActiveTab('properties')}
+          >
+            Properties
+          </button>
+          <button
             className={`tab-button ${activeTab === 'style' ? 'active' : ''}`}
             onClick={() => setActiveTab('style')}
           >
             Style
+          </button>
+          <button
+            className={`tab-button ${activeTab === 'css' ? 'active' : ''}`}
+            onClick={() => setActiveTab('css')}
+          >
+            CSS
+          </button>
+          <button
+            className={`tab-button ${activeTab === 'ai' ? 'active' : ''}`}
+            onClick={() => setActiveTab('ai')}
+          >
+            AI
           </button>
         </div>
         <div className="properties-content">
@@ -1008,6 +1449,7 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
               onSelect={onSelect}
               onDelete={onDelete}
               onUpdate={onUpdate}
+              onReorder={onReorder}
             />
           ) : activeTab === 'ai' ? (
             <div className="properties-empty">
@@ -1167,9 +1609,181 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
     return changes
   }
   
+  // Helper function to check if prompt is clear enough to auto-apply
+  const isClearRequest = (prompt: string): boolean => {
+    const lower = prompt.toLowerCase().trim()
+    const clearPatterns = [
+      /^(make|set|change|update|add|remove|delete|clear)\s+(background|bg|color|text|font|size|width|height|padding|margin|border|opacity|display|position)/i,
+      /^(center|align|justify|flex|grid)/i,
+      /^(make|set)\s+(it|this|component)\s+(blue|red|green|yellow|black|white|gray|grey|transparent)/i,
+      /^(make|set)\s+(it|this|component)\s+(\d+)\s*(px|rem|em|%)/i,
+      /^(bold|italic|underline|hidden|visible|block|inline|flex|grid|none)/i
+    ]
+    
+    return clearPatterns.some(pattern => pattern.test(lower))
+  }
+  
   // Helper function to process a prompt (can be called with any prompt string)
+  // Detect if prompt is a creation request (not modification)
+  const isCreationRequest = (prompt: string): boolean => {
+    const lower = prompt.toLowerCase().trim()
+    const creationKeywords = [
+      'create', 'make', 'build', 'generate', 'add new', 'new component',
+      'new form', 'new page', 'new button', 'new card', 'new chart'
+    ]
+    return creationKeywords.some(keyword => lower.startsWith(keyword) || lower.includes(` ${keyword} `))
+  }
+
   const processPrompt = async (promptText: string) => {
-    if (!selectedComponent) return
+    // If it's a creation request and we have onAddComponent, create a new component
+    if (isCreationRequest(promptText) && onAddComponent) {
+      try {
+        setAiProcessing(true)
+        setAiMessages(prev => [...prev, {
+          type: 'user',
+          content: promptText,
+          timestamp: new Date()
+        }])
+
+        // Use AI Development API to generate the component
+        const response = await aiDevelopmentAPI.generateComponent({
+          description: promptText,
+          existing_components: allComponents
+        })
+
+        if (response.result && response.result.type) {
+          // Convert AI component to ComponentNode format
+          let componentCounter = 0
+          const baseTimestamp = Date.now()
+          
+          const convertAIComponent = (comp: any, parentId?: string): ComponentNode[] => {
+            componentCounter++
+            const randomId = Math.random().toString(36).substring(7)
+            
+            // Extract children from props if they exist
+            const props = { ...(comp.props || {}) }
+            const childrenFromProps = props.children && Array.isArray(props.children) ? props.children : []
+            const childrenFromRoot = comp.children && Array.isArray(comp.children) ? comp.children : []
+            
+            // Remove children from props if it's an array
+            if (Array.isArray(props.children)) {
+              delete props.children
+            }
+
+            // Ensure form elements have visible default styles
+            if (comp.type === 'form' && (!props.style || Object.keys(props.style).length === 0)) {
+              props.style = {
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1rem',
+                padding: '1.5rem',
+                border: '1px solid #ddd',
+                borderRadius: '8px',
+                backgroundColor: '#fff',
+                maxWidth: '500px',
+                width: '100%'
+              }
+            } else if (comp.type === 'form' && props.style) {
+              // Ensure form has at least some basic styles for visibility
+              if (!props.style.display) {
+                props.style.display = 'flex'
+              }
+              if (!props.style.flexDirection) {
+                props.style.flexDirection = 'column'
+              }
+              if (!props.style.padding && !props.style.paddingTop && !props.style.paddingBottom) {
+                props.style.padding = '1.5rem'
+              }
+              if (!props.style.width && !props.style.maxWidth) {
+                props.style.maxWidth = '500px'
+                props.style.width = '100%'
+              }
+            }
+
+            const componentNode: ComponentNode = {
+              id: comp.id || `comp-${baseTimestamp}-${componentCounter}-${randomId}`,
+              type: comp.type || 'div',
+              props: props,
+              children: [],
+              parentId: parentId || undefined,
+            }
+
+            const allComponents: ComponentNode[] = [componentNode]
+
+            // Process children from root level first
+            if (childrenFromRoot.length > 0) {
+              childrenFromRoot.forEach((child: any) => {
+                const childComponents = convertAIComponent(child, componentNode.id)
+                allComponents.push(...childComponents)
+              })
+            }
+            // Then process children from props
+            else if (childrenFromProps.length > 0) {
+              childrenFromProps.forEach((child: any) => {
+                const childComponents = convertAIComponent(child, componentNode.id)
+                allComponents.push(...childComponents)
+              })
+            }
+
+            return allComponents
+          }
+
+          const allComponentsToAdd = convertAIComponent(response.result)
+          
+          // Add all components
+          allComponentsToAdd.forEach(comp => {
+            onAddComponent(comp)
+          })
+
+          // Auto-select the root component
+          const rootComponent = allComponentsToAdd.find(c => !c.parentId) || allComponentsToAdd[0]
+          if (rootComponent && onSelect) {
+            onSelect(rootComponent.id)
+          }
+
+          setAiMessages(prev => [...prev, {
+            type: 'assistant',
+            content: `✅ Created ${response.result.type} component and added to canvas! ${response.explanation || ''}`,
+            timestamp: new Date(),
+            applied: true
+          }])
+
+          showToast('Component created and added to canvas!', 'success')
+          setAiProcessing(false)
+          return
+        } else {
+          setAiMessages(prev => [...prev, {
+            type: 'assistant',
+            content: response.explanation || 'Could not create component. Please try again.',
+            timestamp: new Date(),
+            applied: false
+          }])
+          setAiProcessing(false)
+          return
+        }
+      } catch (error: any) {
+        console.error('Error creating component:', error)
+        setAiMessages(prev => [...prev, {
+          type: 'assistant',
+          content: `Error: ${error.message || 'Failed to create component'}`,
+          timestamp: new Date(),
+          applied: false
+        }])
+        setAiProcessing(false)
+        return
+      }
+    }
+
+    // If no component selected and it's not a creation request, show message
+    if (!selectedComponent) {
+      setAiMessages(prev => [...prev, {
+        type: 'assistant',
+        content: 'Please select a component to modify, or use "create" to make a new component.',
+        timestamp: new Date(),
+        applied: false
+      }])
+      return
+    }
     
     try {
       // Call backend LLM API
@@ -1182,8 +1796,15 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
       
       const changes = response.changes
       
-      // Handle clarification flow - if system needs confirmation
+      // Handle clarification flow - show guess and ask for confirmation
       if (response.needs_clarification && response.guess) {
+        // Track this prompt to avoid asking again
+        recentPromptsRef.current.push({ prompt: promptText, timestamp: Date.now() })
+        // Keep only last 5 prompts
+        if (recentPromptsRef.current.length > 5) {
+          recentPromptsRef.current.shift()
+        }
+        
         setAiProcessing(false)
         
         // Show confirmation dialog - wrap in promise
@@ -1192,8 +1813,8 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
           confirm({
             title: 'Did you mean this?',
             message: response.message || `Did you mean: "${response.guess}"?`,
-            confirmText: 'Yes, that\'s correct',
-            cancelText: 'No, try again',
+            confirmText: 'Yes, apply it',
+            cancelText: 'No, cancel',
             confirmButtonStyle: 'primary',
             onConfirm: () => {
               if (!resolved) {
@@ -1214,19 +1835,19 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
           // User confirmed - process the guess as the actual prompt
           setAiMessages(prev => [...prev, {
             type: 'assistant',
-            content: `Processing: "${response.guess}"`,
+            content: `Applying: "${response.guess}"`,
             timestamp: new Date(),
             applied: false
           }])
           
-          // Process the confirmed guess
+          // Process the confirmed guess (will show confirmation again)
           await processPrompt(response.guess)
           return
         } else {
           // User rejected - show message asking for rephrasing
           setAiMessages(prev => [...prev, {
             type: 'assistant',
-            content: response.message + '\n\nPlease try rephrasing your request or be more specific.',
+            content: 'No changes applied. Please try rephrasing your request or be more specific.',
             timestamp: new Date(),
             applied: false
           }])
@@ -1246,7 +1867,104 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
         return
       }
       
-      // Apply changes to the component
+      // Format changes for display
+      const formatChanges = (changes: any): string => {
+        const parts: string[] = []
+        
+        if (changes.style && Object.keys(changes.style).length > 0) {
+          const styleParts = Object.entries(changes.style).map(([key, value]) => {
+            // Convert camelCase to kebab-case for display
+            const kebabKey = key.replace(/([A-Z])/g, '-$1').toLowerCase()
+            return `  ${kebabKey}: ${value};`
+          })
+          parts.push('Style Changes:')
+          parts.push(...styleParts)
+        }
+        
+        if (changes.customCSS) {
+          parts.push('Custom CSS:')
+          parts.push(changes.customCSS)
+        }
+        
+        if (changes.type) {
+          parts.push(`Component Type: ${changes.type}`)
+        }
+        
+        if (changes.props && Object.keys(changes.props).length > 0) {
+          const propParts = Object.entries(changes.props)
+            .filter(([key]) => key !== 'children' || changes.props[key] !== 'New Text')
+            .map(([key, value]) => {
+              if (key === 'children' && typeof value === 'string') {
+                return `  Content: "${value}"`
+              }
+              return `  ${key}: ${JSON.stringify(value)}`
+            })
+          if (propParts.length > 0) {
+            parts.push('Properties:')
+            parts.push(...propParts)
+          }
+        }
+        
+        return parts.length > 0 ? parts.join('\n') : 'No changes detected'
+      }
+      
+      const changesDisplay = formatChanges(changes)
+      
+      // Build the full response message including raw AI response if available
+      let responseMessage = `I understand your request. Here are the changes I will apply:\n\n${changesDisplay}`
+      
+      // Add raw AI response if available
+      if (response.raw_response) {
+        responseMessage += `\n\n--- Full AI Model Response ---\n${response.raw_response}`
+      }
+      
+      responseMessage += `\n\nDo you want to apply these changes?`
+      
+      // Always show changes in chat first
+      setAiProcessing(false)
+      setAiMessages(prev => [...prev, {
+        type: 'assistant',
+        content: responseMessage,
+        timestamp: new Date(),
+        applied: false
+      }])
+      
+      // Show confirmation dialog
+      const confirmed = await new Promise<boolean>((resolve) => {
+        let resolved = false
+        confirm({
+          title: 'Do you want to apply this?',
+          message: `The following changes will be applied:\n\n${changesDisplay}`,
+          confirmText: 'Yes, apply it',
+          cancelText: 'No, cancel',
+          confirmButtonStyle: 'primary',
+          onConfirm: () => {
+            if (!resolved) {
+              resolved = true
+              resolve(true)
+            }
+          },
+          onCancel: () => {
+            if (!resolved) {
+              resolved = true
+              resolve(false)
+            }
+          }
+        })
+      })
+      
+      if (!confirmed) {
+        // User rejected - show message
+        setAiMessages(prev => [...prev, {
+          type: 'assistant',
+          content: 'Changes not applied. You can modify your request and try again.',
+          timestamp: new Date(),
+          applied: false
+        }])
+        return
+      }
+      
+      // User confirmed - apply changes to the component
       const updates: Partial<ComponentNode> = {}
       
       // Start with current props
@@ -1266,6 +1984,11 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
         })
       }
       
+      // Apply customCSS changes (for hover, pseudo-classes, etc.)
+      if (changes.customCSS) {
+        newProps.customCSS = changes.customCSS
+      }
+      
       // Set props if there are any changes
       // Filter out unwanted default "New Text" children
       if (changes.props && changes.props.children) {
@@ -1276,7 +1999,7 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
         }
       }
       
-      if (changes.style || changes.props) {
+      if (changes.style || changes.props || changes.customCSS) {
         updates.props = newProps
       }
       
@@ -1348,10 +2071,11 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
         showToast('Modal created and added to canvas! Click the button to open it.', 'success')
       }
       
-      // Add assistant success message from backend
+      // Add assistant success message showing what was applied
+      const appliedMessage = response.message || 'Changes applied successfully!'
       setAiMessages(prev => [...prev, {
         type: 'assistant',
-        content: response.message,
+        content: `${appliedMessage}\n\nApplied changes:\n${changesDisplay}`,
         timestamp: new Date(),
         applied: true
       }])
@@ -1401,11 +2125,28 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
   }
 
   const handleChange = (key: string, value: any) => {
-    const newProps = { ...localProps, [key]: value }
-    setLocalProps(newProps)
-    if (selectedComponent) {
-      onUpdate(selectedComponent.id, { props: newProps })
+    if (!selectedComponent) {
+      console.warn('Cannot update: No component selected')
+      return
     }
+    
+    // If value is empty string, remove the property instead of setting it to empty
+    const newProps = { ...localProps }
+    if (value === '' || value === null || value === undefined) {
+      delete newProps[key]
+      // Also set to undefined in the update to ensure it's deleted
+      newProps[key] = undefined
+    } else {
+      newProps[key] = value
+    }
+    setLocalProps(newProps)
+    // Ensure we're updating the correct component by ID
+    // Pass the props with undefined for deleted properties
+    const updateProps = { ...newProps }
+    if (value === '' || value === null || value === undefined) {
+      updateProps[key] = undefined
+    }
+    onUpdate(selectedComponent.id, { props: updateProps })
   }
 
   const handleStyleChange = (styleKey: string, value: string) => {
@@ -1803,29 +2544,227 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
     styleProps.push(
       <div key="colors-section" className="properties-section">
         <h4>Colors</h4>
+        {(() => {
+          const updateGradient = (direction: string, colors: Array<{color: string, stop: string}>) => {
+            const colorStops = colors.map(c => `${c.color} ${c.stop}`).join(', ')
+            const gradientValue = `linear-gradient(${direction}, ${colorStops})`
+            handleStyleChange('backgroundColor', gradientValue)
+            // Also set background for compatibility
+            handleStyleChange('background', gradientValue)
+          }
+          
+          return (
         <div className="property-group">
-          <label>Background Color</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <label>Background</label>
+                <select
+                  value={backgroundType}
+                  onChange={(e) => {
+                    const newType = e.target.value as 'solid' | 'gradient'
+                    setBackgroundType(newType)
+                    if (newType === 'solid') {
+                      handleStyleChange('backgroundColor', '#ffffff')
+                      handleStyleChange('background', '')
+                    } else {
+                      updateGradient(gradientDirection, gradientColors)
+                    }
+                  }}
+                  style={{
+                    padding: '0.2rem 0.4rem',
+                    fontSize: '0.7rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="solid">Solid Color</option>
+                  <option value="gradient">Linear Gradient</option>
+                </select>
+              </div>
+              
+              {backgroundType === 'solid' ? (
+                <div className="color-input-group">
           <input
             type="color"
             value={localProps.style?.backgroundColor || '#ffffff'}
             onChange={(e) => handleStyleChange('backgroundColor', e.target.value)}
+                    className="color-picker"
+                  />
+                  <input
+                    type="text"
+                    value={localProps.style?.backgroundColor || '#ffffff'}
+                    onChange={(e) => handleStyleChange('backgroundColor', e.target.value)}
+                    placeholder="Enter color (hex, rgb, name)..."
+                    className="color-text-input"
           />
         </div>
+              ) : (
+                <div className="gradient-editor">
+                  <div style={{ marginBottom: '0.5rem' }}>
+                    <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.3rem' }}>Direction</label>
+                    <select
+                      value={gradientDirection}
+                      onChange={(e) => {
+                        const newDirection = e.target.value
+                        setGradientDirection(newDirection)
+                        updateGradient(newDirection, gradientColors)
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '0.3rem',
+                        fontSize: '0.75rem',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px'
+                      }}
+                    >
+                      <option value="0deg">To Top</option>
+                      <option value="45deg">To Top Right</option>
+                      <option value="90deg">To Right</option>
+                      <option value="135deg">To Bottom Right</option>
+                      <option value="180deg">To Bottom</option>
+                      <option value="225deg">To Bottom Left</option>
+                      <option value="270deg">To Left</option>
+                      <option value="315deg">To Top Left</option>
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
+                      <label style={{ fontSize: '0.7rem' }}>Color Stops</label>
+                      <button
+                        onClick={() => {
+                          const newColors = [...gradientColors, { color: '#ffffff', stop: `${gradientColors.length * 50}%` }]
+                          setGradientColors(newColors)
+                          updateGradient(gradientDirection, newColors)
+                        }}
+                        style={{
+                          padding: '0.2rem 0.5rem',
+                          fontSize: '0.7rem',
+                          backgroundColor: '#667eea',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        + Add Color
+                      </button>
+                    </div>
+                    
+                    {gradientColors.map((colorStop, index) => (
+                      <div key={index} style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.4rem', alignItems: 'center' }}>
+                        <input
+                          type="color"
+                          value={colorStop.color}
+                          onChange={(e) => {
+                            const newColors = [...gradientColors]
+                            newColors[index].color = e.target.value
+                            setGradientColors(newColors)
+                            updateGradient(gradientDirection, newColors)
+                          }}
+                          className="color-picker"
+                          style={{ width: '50px', height: '30px' }}
+                        />
+                        <input
+                          type="text"
+                          value={colorStop.color}
+                          onChange={(e) => {
+                            const newColors = [...gradientColors]
+                            newColors[index].color = e.target.value
+                            setGradientColors(newColors)
+                            updateGradient(gradientDirection, newColors)
+                          }}
+                          placeholder="#ffffff"
+                          style={{
+                            flex: 1,
+                            padding: '0.3rem',
+                            fontSize: '0.75rem',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px'
+                          }}
+                        />
+                        <input
+                          type="text"
+                          value={colorStop.stop}
+                          onChange={(e) => {
+                            const newColors = [...gradientColors]
+                            newColors[index].stop = e.target.value
+                            setGradientColors(newColors)
+                            updateGradient(gradientDirection, newColors)
+                          }}
+                          placeholder="0%"
+                          style={{
+                            width: '60px',
+                            padding: '0.3rem',
+                            fontSize: '0.75rem',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            textAlign: 'center'
+                          }}
+                        />
+                        {gradientColors.length > 2 && (
+                          <button
+                            onClick={() => {
+                              const newColors = gradientColors.filter((_, i) => i !== index)
+                              setGradientColors(newColors)
+                              updateGradient(gradientDirection, newColors)
+                            }}
+                            style={{
+                              padding: '0.2rem 0.4rem',
+                              fontSize: '0.7rem',
+                              backgroundColor: '#e74c3c',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })()}
         <div className="property-group">
           <label>Text Color</label>
+          <div className="color-input-group">
           <input
             type="color"
             value={localProps.style?.color || '#000000'}
             onChange={(e) => handleStyleChange('color', e.target.value)}
-          />
+              className="color-picker"
+            />
+            <input
+              type="text"
+              value={localProps.style?.color || '#000000'}
+              onChange={(e) => handleStyleChange('color', e.target.value)}
+              placeholder="Enter color (hex, rgb, name)..."
+              className="color-text-input"
+            />
+          </div>
         </div>
         <div className="property-group">
           <label>Border Color</label>
+          <div className="color-input-group">
           <input
             type="color"
             value={localProps.style?.borderColor || '#000000'}
             onChange={(e) => handleStyleChange('borderColor', e.target.value)}
-          />
+              className="color-picker"
+            />
+            <input
+              type="text"
+              value={localProps.style?.borderColor || '#000000'}
+              onChange={(e) => handleStyleChange('borderColor', e.target.value)}
+              placeholder="Enter color (hex, rgb, name)..."
+              className="color-text-input"
+            />
+          </div>
         </div>
       </div>
     )
@@ -1875,6 +2814,7 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
       </div>
     )
 
+
     return (
       <>
         {commonProps.length > 0 && (
@@ -1898,10 +2838,28 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
           Tree
         </button>
         <button
+          className={`tab-button ${activeTab === 'properties' ? 'active' : ''}`}
+          onClick={() => setActiveTab('properties')}
+        >
+          Properties
+        </button>
+        <button
           className={`tab-button ${activeTab === 'style' ? 'active' : ''}`}
           onClick={() => setActiveTab('style')}
         >
           Style
+        </button>
+        <button
+          className={`tab-button ${activeTab === 'css' ? 'active' : ''}`}
+          onClick={() => setActiveTab('css')}
+        >
+          CSS
+        </button>
+        <button
+          className={`tab-button ${activeTab === 'ai' ? 'active' : ''}`}
+          onClick={() => setActiveTab('ai')}
+        >
+          AI
         </button>
       </div>
       <div className="properties-content">
@@ -1912,7 +2870,761 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
             onSelect={onSelect}
             onDelete={onDelete}
             onUpdate={onUpdate}
+            onReorder={onReorder}
           />
+        ) : activeTab === 'properties' ? (
+          <div className="component-properties-tab">
+            <div className="properties-section">
+              <h4>Component Properties</h4>
+              
+              {/* Component ID */}
+              <div className="property-group">
+                <label>Component ID</label>
+                <input
+                  type="text"
+                  value={selectedComponent.id}
+                  onChange={(e) => {
+                    const newId = e.target.value.trim()
+                    if (newId && newId !== selectedComponent.id) {
+                      // Check if ID already exists
+                      const idExists = allComponents.some(c => c.id === newId)
+                      if (idExists) {
+                        showToast('Component ID already exists', 'error')
+                        return
+                      }
+                      if (!newId) {
+                        showToast('Component ID cannot be empty', 'error')
+                        return
+                      }
+                      
+                      // Since onUpdate can't change the ID (it uses ID to find the component),
+                      // we need to: add new component, update children, then delete old
+                      if (!onAddComponent || !onDelete) {
+                        showToast('Cannot update ID: missing required handlers', 'error')
+                        return
+                      }
+                      
+                      // Get all children that need parentId updated
+                      const children = allComponents.filter(c => c.parentId === selectedComponent.id)
+                      
+                      // Create new component with new ID
+                      const newComponent = { ...selectedComponent, id: newId }
+                      
+                      // Add the new component
+                      onAddComponent(newComponent, newComponent.parentId)
+                      
+                      // Update all children's parentId to point to new ID
+                      children.forEach(child => {
+                        onUpdate(child.id, { parentId: newId })
+                      })
+                      
+                      // Delete the old component
+                      onDelete(selectedComponent.id)
+                      
+                      // Select the new component
+                      onSelect(newId)
+                      showToast('Component ID updated successfully', 'success')
+                    }
+                  }}
+                  placeholder="Component ID"
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    fontSize: '0.875rem'
+                  }}
+                />
+                <small style={{ color: '#666', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
+                  Unique identifier for this component (changing ID updates all references)
+                </small>
+              </div>
+
+              {/* Component Type */}
+              <div className="property-group">
+                <label>Component Type</label>
+                <input
+                  type="text"
+                  value={selectedComponent.type}
+                  onChange={(e) => {
+                    const newType = e.target.value.trim()
+                    if (newType && newType !== selectedComponent.type) {
+                      onUpdate(selectedComponent.id, { type: newType })
+                    }
+                  }}
+                  placeholder="Component type (div, button, input, etc.)"
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    fontSize: '0.875rem'
+                  }}
+                />
+                <small style={{ color: '#666', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
+                  HTML element type or custom component name
+                </small>
+              </div>
+
+              {/* Class Name */}
+              <div className="property-group">
+                <label>Class Name</label>
+                <input
+                  type="text"
+                  value={localProps.className || ''}
+                  onChange={(e) => handleChange('className', e.target.value)}
+                  placeholder="CSS class name"
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    fontSize: '0.875rem'
+                  }}
+                />
+                <small style={{ color: '#666', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
+                  CSS class name(s) for this component
+                </small>
+              </div>
+
+              {/* HTML ID Attribute */}
+              <div className="property-group">
+                <label>HTML ID Attribute</label>
+                <input
+                  type="text"
+                  value={localProps.id || ''}
+                  onChange={(e) => handleChange('id', e.target.value)}
+                  placeholder="HTML id attribute"
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    fontSize: '0.875rem'
+                  }}
+                />
+              </div>
+
+              {/* Component Name/Label */}
+              <div className="property-group">
+                <label>Name</label>
+                <input
+                  type="text"
+                  value={localProps.name || ''}
+                  onChange={(e) => handleChange('name', e.target.value)}
+                  placeholder="Component name/label"
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    fontSize: '0.875rem'
+                  }}
+                />
+              </div>
+
+              {/* Content */}
+              <div className="property-group">
+                <label>Content</label>
+                {(() => {
+                  // Check if component has child components
+                  const hasChildComponents = allComponents.some(c => c.parentId === selectedComponent.id)
+                  const currentContent = typeof localProps.children === 'string' ? localProps.children : ''
+                  
+                  return (
+                    <>
+                      <textarea
+                        value={currentContent}
+                        onChange={(e) => {
+                          // Only allow text content if component has no child components
+                          if (!hasChildComponents) {
+                            handleChange('children', e.target.value)
+                          } else {
+                            showToast('Cannot set text content: component has child components. Remove child components first.', 'warning')
+                          }
+                        }}
+                        placeholder={hasChildComponents ? "Component has child components - remove them first" : "Component text content"}
+                        rows={3}
+                        disabled={hasChildComponents}
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px',
+                          fontSize: '0.875rem',
+                          fontFamily: 'inherit',
+                          resize: 'vertical',
+                          minHeight: '60px',
+                          backgroundColor: hasChildComponents ? '#f5f5f5' : 'white',
+                          cursor: hasChildComponents ? 'not-allowed' : 'text'
+                        }}
+                      />
+                      <small style={{ color: '#666', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
+                        {hasChildComponents 
+                          ? 'Text content disabled: component has child components. Remove child components to enable text content.'
+                          : 'Text content displayed inside this component'}
+                      </small>
+                    </>
+                  )
+                })()}
+              </div>
+
+              {/* Generate Backend API Button (for forms) */}
+              {(selectedComponent.type === 'form' || selectedComponent.type?.toLowerCase().includes('form')) && projectId && (
+                <div className="property-group" style={{ marginTop: '1.5rem', padding: '1rem', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
+                  <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '1rem', fontWeight: '600' }}>Backend API</h4>
+                  <p style={{ margin: '0 0 1rem 0', fontSize: '0.875rem', color: '#666' }}>
+                    Generate backend API endpoints, database models, and integrate with this form.
+                  </p>
+                  <button
+                    onClick={async () => {
+                      if (!projectId) {
+                        showToast('Project ID not available', 'error')
+                        return
+                      }
+                      
+                      try {
+                        setFormAPIProcessing(true)
+                        
+                        const request: FormAPIRequest = {
+                          component_id: selectedComponent.id,
+                          component_data: selectedComponent as any,
+                          project_id: projectId
+                        }
+                        
+                        const response = await aiAssistantAPI.generateFormAPI(request)
+                        
+                        if (response.success) {
+                          showToast('Backend API generated successfully!', 'success')
+                          
+                          // Show detailed summary in a modal or alert
+                          const summary = `✅ ${response.message}\n\n${response.summary}`
+                          alert(summary)
+                        } else {
+                          showToast(`API generation completed with errors: ${response.message}`, 'warning')
+                          
+                          const errorSummary = `❌ ${response.message}\n\nErrors:\n${response.errors.join('\n')}\n\nWarnings:\n${response.warnings.join('\n')}`
+                          alert(errorSummary)
+                        }
+                      } catch (error: any) {
+                        console.error('Form API generation error:', error)
+                        showToast(`Error generating API: ${error.response?.data?.detail || error.message}`, 'error')
+                      } finally {
+                        setFormAPIProcessing(false)
+                      }
+                    }}
+                    disabled={formAPIProcessing}
+                    style={{
+                      width: '100%',
+                      padding: '0.75rem 1rem',
+                      backgroundColor: formAPIProcessing ? '#ccc' : '#667eea',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: formAPIProcessing ? 'not-allowed' : 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: '500',
+                      transition: 'background-color 0.2s'
+                    }}
+                  >
+                    {formAPIProcessing ? 'Generating API...' : '🔧 Generate Backend API'}
+                  </button>
+                  {formAPIProcessing && (
+                    <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.75rem', color: '#666', fontStyle: 'italic' }}>
+                      This may take a moment. Checking project structure, generating models, routes, and tests...
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Data Attributes Section */}
+              <div className="properties-section" style={{ marginTop: '1.5rem' }}>
+                <h4>Data Attributes</h4>
+                {Object.keys(localProps).filter(key => key.startsWith('data-')).length > 0 ? (
+                  Object.keys(localProps)
+                    .filter(key => key.startsWith('data-'))
+                    .map(key => (
+                      <div key={key} className="property-group">
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            value={key}
+                            disabled
+                            style={{
+                              flex: '1',
+                              padding: '0.5rem',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              fontSize: '0.875rem',
+                              backgroundColor: '#f5f5f5'
+                            }}
+                          />
+                          <input
+                            type="text"
+                            value={localProps[key] || ''}
+                            onChange={(e) => handleChange(key, e.target.value)}
+                            placeholder="Value"
+                            style={{
+                              flex: '2',
+                              padding: '0.5rem',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              fontSize: '0.875rem'
+                            }}
+                          />
+                          <button
+                            onClick={() => {
+                              const newProps = { ...localProps }
+                              delete newProps[key]
+                              setLocalProps(newProps)
+                              onUpdate(selectedComponent.id, { props: newProps })
+                            }}
+                            className="remove-property-btn"
+                            title="Remove attribute"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                ) : (
+                  <p style={{ color: '#999', fontSize: '0.875rem', fontStyle: 'italic' }}>No data attributes</p>
+                )}
+                <button
+                  onClick={() => {
+                    const attrName = prompt('Enter data attribute name (e.g., data-testid):')
+                    if (attrName && attrName.trim() && attrName.startsWith('data-')) {
+                      handleChange(attrName.trim(), '')
+                    } else if (attrName && attrName.trim()) {
+                      showToast('Data attributes must start with "data-"', 'error')
+                    }
+                  }}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    backgroundColor: '#667eea',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    marginTop: '0.5rem'
+                  }}
+                >
+                  + Add Data Attribute
+                </button>
+              </div>
+
+              {/* Other Properties Section */}
+              <div className="properties-section" style={{ marginTop: '1.5rem' }}>
+                <h4>Other Properties</h4>
+                {Object.keys(localProps).filter(key => 
+                  !['style', 'children', 'className', 'id', 'name', 'pageId', 'customCSS'].includes(key) &&
+                  !key.startsWith('data-') &&
+                  !key.startsWith('on') // Exclude event handlers
+                ).length > 0 ? (
+                  Object.keys(localProps)
+                    .filter(key => 
+                      !['style', 'children', 'className', 'id', 'name', 'pageId', 'customCSS'].includes(key) &&
+                      !key.startsWith('data-') &&
+                      !key.startsWith('on')
+                    )
+                    .map(key => (
+                      <div key={key} className="property-group">
+                        <div className="property-label-row">
+                          <label>{key}</label>
+                          <button
+                            onClick={() => {
+                              const newProps = { ...localProps }
+                              delete newProps[key]
+                              setLocalProps(newProps)
+                              onUpdate(selectedComponent.id, { props: newProps })
+                            }}
+                            className="remove-property-btn"
+                            title="Remove property"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <input
+                          type="text"
+                          value={typeof localProps[key] === 'string' ? localProps[key] : JSON.stringify(localProps[key])}
+                          onChange={(e) => {
+                            try {
+                              // Try to parse as JSON, fallback to string
+                              const value = JSON.parse(e.target.value)
+                              handleChange(key, value)
+                            } catch {
+                              handleChange(key, e.target.value)
+                            }
+                          }}
+                          placeholder="Property value"
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            fontSize: '0.875rem'
+                          }}
+                        />
+                      </div>
+                    ))
+                ) : (
+                  <p style={{ color: '#999', fontSize: '0.875rem', fontStyle: 'italic' }}>No additional properties</p>
+                )}
+                <button
+                  onClick={() => {
+                    const propName = prompt('Enter property name:')
+                    if (propName && propName.trim()) {
+                      const trimmedName = propName.trim()
+                      if (['style', 'children', 'className', 'id', 'name', 'pageId', 'customCSS'].includes(trimmedName)) {
+                        showToast('This property is managed elsewhere', 'error')
+                        return
+                      }
+                      if (trimmedName.startsWith('data-')) {
+                        showToast('Use "Add Data Attribute" for data attributes', 'error')
+                        return
+                      }
+                      if (trimmedName.startsWith('on')) {
+                        showToast('Event handlers are not editable here', 'error')
+                        return
+                      }
+                      handleChange(trimmedName, '')
+                    }
+                  }}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    backgroundColor: '#667eea',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    marginTop: '0.5rem'
+                  }}
+                >
+                  + Add Property
+                </button>
+              </div>
+
+              {/* Action Message Section */}
+              <div className="properties-section" style={{ marginTop: '1.5rem' }}>
+                <h4>Action Message</h4>
+                <div className="action-input-section">
+                  <label className="action-label">Describe what should happen when this component is interacted with</label>
+                  <textarea
+                    className="action-textarea"
+                    placeholder="Example: when signup button click then open login page"
+                    value={actionMessage}
+                    onChange={(e) => setActionMessage(e.target.value)}
+                    rows={3}
+                  />
+                  <button
+                    className="action-apply-btn"
+                    onClick={async () => {
+                      if (!actionMessage.trim() || !selectedComponent) {
+                        showToast('Please enter an action message', 'warning')
+                        return
+                      }
+                      
+                      const comp = selectedComponent as ComponentNode
+                      setActionProcessing(true)
+                      try {
+                        const response = await aiAssistantAPI.processAction({
+                          action_message: actionMessage,
+                          component_type: comp.type,
+                          component_id: comp.id,
+                          current_props: comp.props || {},
+                          pages: pages.map(p => ({ id: p.id, name: p.name, route: p.route }))
+                        })
+                        
+                        console.log('Action response received:', response)
+                        setActionResponse(response)
+                        showToast('Action processed. Please review and confirm.', 'info')
+                        // Scroll to review section after a short delay
+                        setTimeout(() => {
+                          const reviewSection = document.querySelector('.action-review-container')
+                          if (reviewSection) {
+                            reviewSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+                          }
+                        }, 100)
+                      } catch (error: any) {
+                        console.error('Error processing action:', error)
+                        showToast(error?.response?.data?.detail || 'Failed to process action', 'error')
+                      } finally {
+                        setActionProcessing(false)
+                      }
+                    }}
+                    disabled={actionProcessing || !actionMessage.trim()}
+                  >
+                    {actionProcessing ? 'Processing...' : 'Apply'}
+                  </button>
+                </div>
+                
+                {/* Debug: Show if response exists */}
+                {actionResponse && (
+                  <div style={{ padding: '8px', background: '#e3f2fd', borderRadius: '4px', marginTop: '8px', fontSize: '0.75rem' }}>
+                    Debug: Action response received (ID: {actionResponse.action_code ? 'Yes' : 'No'})
+                  </div>
+                )}
+                
+                {actionResponse && selectedComponent && (
+                  <div 
+                    className="action-review-container" 
+                    style={{ 
+                      marginTop: '1rem',
+                      display: 'block',
+                      visibility: 'visible',
+                      opacity: 1,
+                      position: 'relative',
+                      zIndex: 1
+                    }}
+                  >
+                    <div className="action-review-header">
+                      <h3 style={{ margin: 0, fontSize: '1rem', color: '#333' }}>📋 Review Changes Before Applying</h3>
+                      <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.85rem', color: '#666' }}>
+                        Please review all details below before confirming the changes
+                      </p>
+                    </div>
+
+                    <div className="action-response-section">
+                      <div className="action-response-header">
+                        <h4 style={{ margin: 0, fontSize: '0.95rem' }}>Action Summary</h4>
+                        <button
+                          className="action-close-btn"
+                          onClick={() => setActionResponse(null)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      
+                      <div className="action-explanation">
+                        <strong>📋 What will happen:</strong>
+                        <p>{actionResponse.explanation || 'Action will be applied to the component'}</p>
+                      </div>
+
+                      <div className="action-detailed-changes">
+                        <strong>🔧 Detailed Changes:</strong>
+                        <div className="action-changes-list">
+                          {actionResponse.detailed_changes ? (
+                            actionResponse.detailed_changes.split('\n').map((line: string, idx: number) => (
+                              line.trim() && (
+                                <div key={idx} className="action-change-item">
+                                  {line}
+                                </div>
+                              )
+                            ))
+                          ) : (
+                            <div className="action-change-item">
+                              {actionResponse.changes?.props ? (
+                                Object.entries(actionResponse.changes.props).map(([key, value]) => (
+                                  <div key={key}>
+                                    • Add/Update property '{key}': {typeof value === 'string' ? value : JSON.stringify(value)}
+                                  </div>
+                                ))
+                              ) : (
+                                <div>• No specific changes detected</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {actionResponse.project_impact ? (
+                        <div className="action-project-impact">
+                          <strong>🚀 Project Impact:</strong>
+                          <p>{actionResponse.project_impact}</p>
+                        </div>
+                      ) : (
+                        <div className="action-project-impact">
+                          <strong>🚀 Project Impact:</strong>
+                          <p>This change will modify the component's behavior. When users interact with this component, the specified action will be triggered.</p>
+                        </div>
+                      )}
+
+                      <div className="action-code-preview">
+                        <strong>💻 Generated Code:</strong>
+                        <pre>{actionResponse.action_code || 'No code generated'}</pre>
+                      </div>
+
+                      <div className="action-component-info">
+                        <strong>📦 Component Details:</strong>
+                        <div className="action-info-grid">
+                          <div>
+                            <span className="action-info-label">Component ID:</span>
+                            <span className="action-info-value">{selectedComponent.id}</span>
+                          </div>
+                          <div>
+                            <span className="action-info-label">Component Type:</span>
+                            <span className="action-info-value">{selectedComponent.type}</span>
+                          </div>
+                          {actionResponse.changes?.props && Object.keys(actionResponse.changes.props).length > 0 && (
+                            <div style={{ gridColumn: '1 / -1', marginTop: '8px' }}>
+                              <span className="action-info-label">Properties to be added/modified:</span>
+                              <div className="action-props-list">
+                                {Object.keys(actionResponse.changes.props).map((key) => (
+                                  <span key={key} className="action-prop-badge">{key}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="action-summary-box">
+                        <strong>📝 Summary:</strong>
+                        <ul>
+                          <li>Component <code>{selectedComponent.id}</code> ({selectedComponent.type}) will be modified</li>
+                          {actionResponse.changes?.props && Object.keys(actionResponse.changes.props).length > 0 && (
+                            <li>
+                              {Object.keys(actionResponse.changes.props).length} propert{Object.keys(actionResponse.changes.props).length === 1 ? 'y' : 'ies'} will be added/modified: {Object.keys(actionResponse.changes.props).join(', ')}
+                            </li>
+                          )}
+                          <li>This change will affect the generated application behavior</li>
+                          <li>Review the generated code above to see exactly what will be added</li>
+                        </ul>
+                      </div>
+
+                      <div className="action-confirm-buttons">
+                        <button
+                          className="action-confirm-btn"
+                          onClick={async () => {
+                            if (!actionResponse || !selectedComponent) return
+                            
+                            // Build detailed confirmation message
+                            const confirmationMessage = `
+📋 REVIEW CHANGES BEFORE APPLYING
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 WHAT WILL HAPPEN:
+${actionResponse.explanation || 'Action will be applied to the component'}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 DETAILED CHANGES:
+${actionResponse.detailed_changes || 
+  (actionResponse.changes?.props ? 
+    Object.entries(actionResponse.changes.props).map(([key, value]) => 
+      `• Add/Update property '${key}': ${typeof value === 'string' ? value : JSON.stringify(value)}`
+    ).join('\n') : 
+    'No specific changes detected')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 PROJECT IMPACT:
+${actionResponse.project_impact || 
+  'This change will modify the component\'s behavior. When users interact with this component, the specified action will be triggered.'}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💻 GENERATED CODE:
+${actionResponse.action_code || 'No code generated'}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📦 COMPONENT DETAILS:
+• Component ID: ${selectedComponent.id}
+• Component Type: ${selectedComponent.type}
+${actionResponse.changes?.props && Object.keys(actionResponse.changes.props).length > 0 ? 
+  `• Properties to be added/modified: ${Object.keys(actionResponse.changes.props).join(', ')}` : 
+  ''}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ Please review all changes above. Once confirmed, these changes will be applied to your component and will affect the generated application.
+
+Do you want to proceed with applying these changes?
+                            `.trim()
+                            
+                            const confirmed = await new Promise<boolean>((resolve) => {
+                              let resolved = false
+                              confirm({
+                                title: '⚠️ Confirm Action Application',
+                                message: confirmationMessage,
+                                confirmText: 'Yes, Apply Changes',
+                                cancelText: 'No, Cancel',
+                                confirmButtonStyle: 'success',
+                                onConfirm: () => {
+                                  if (!resolved) {
+                                    resolved = true
+                                    resolve(true)
+                                  }
+                                },
+                                onCancel: () => {
+                                  if (!resolved) {
+                                    resolved = true
+                                    resolve(false)
+                                  }
+                                }
+                              })
+                            })
+                            
+                            if (!confirmed) {
+                              showToast('Changes not applied. You can review and try again.', 'info')
+                              return
+                            }
+                            
+                            // Apply changes after confirmation
+                            if (actionResponse.changes?.props && selectedComponent) {
+                              const comp = selectedComponent as ComponentNode
+                              const updates: Partial<ComponentNode> = {
+                                props: {
+                                  ...comp.props,
+                                  ...actionResponse.changes.props
+                                }
+                              }
+                              onUpdate(comp.id, updates)
+                              showToast('Action applied successfully!', 'success')
+                              setActionResponse(null)
+                              setActionMessage('')
+                            }
+                          }}
+                        >
+                          ✓ Confirm & Apply Changes
+                        </button>
+                        <button
+                          className="action-cancel-btn"
+                          onClick={() => setActionResponse(null)}
+                        >
+                          ✗ Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'css' ? (
+          <div className="custom-css-tab">
+            <div className="properties-section">
+              <h4>Custom CSS / Pseudo Classes</h4>
+              <div className="property-group">
+                <div className="property-label-row">
+                  <label>Custom CSS</label>
+                  {localProps.customCSS && (
+                    <button
+                      className="remove-property-btn"
+                      onClick={() => handleChange('customCSS', '')}
+                      title="Remove custom CSS"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  value={localProps.customCSS || ''}
+                  onChange={(e) => handleChange('customCSS', e.target.value)}
+                  placeholder="Enter custom CSS including pseudo-classes (e.g., :hover, :before, :after)&#10;&#10;Example:&#10;:hover {&#10;  background-color: #ff0000;&#10;  transform: scale(1.1);&#10;}&#10;&#10;:before {&#10;  content: '★';&#10;  color: gold;&#10;}"
+                  className="custom-css-input"
+                  rows={12}
+                />
+                <div className="custom-css-hint">
+                  <small>You can use pseudo-classes like :hover, :active, :focus, :before, :after, :first-child, etc.</small>
+                </div>
+              </div>
+            </div>
+          </div>
         ) : activeTab === 'ai' ? (
           <div className="ai-chat-container">
             <div className="ai-chat-header">
@@ -2035,10 +3747,108 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
           </div>
         ) : (
           <>
-            <div className="property-group">
+            <div className="property-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1', minWidth: '120px' }}>
               <label>Component Type</label>
               <input type="text" value={selectedComponent.type} disabled />
             </div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.5rem' }}>
+                {onAddComponent && (
+                  <button
+                    onClick={() => {
+                      if (!selectedComponent || !onAddComponent) {
+                        showToast('Please select a component first', 'warning')
+                        return
+                      }
+                      const comp = selectedComponent as ComponentNode
+                      
+                      // Clone the component and all its children recursively
+                      const cloneComponent = (component: ComponentNode, newParentId?: string): ComponentNode => {
+                        const newId = `comp-${Date.now()}-${Math.random().toString(36).substring(7)}`
+                        const cloned: ComponentNode = {
+                          ...component,
+                          id: newId,
+                          parentId: newParentId,
+                          props: {
+                            ...component.props,
+                            // Remove pageId from cloned component (it will be assigned to current page)
+                            pageId: undefined
+                          }
+                        }
+                        return cloned
+                      }
+                      
+                      // Get all children of the selected component
+                      const componentChildren = allComponents.filter(c => c.parentId === comp.id)
+                      
+                      // Clone the main component
+                      const clonedComponent = cloneComponent(comp, comp.parentId)
+                      
+                      // Add the cloned component
+                      onAddComponent(clonedComponent, clonedComponent.parentId)
+                      
+                      // Clone all children recursively
+                      const cloneChildrenRecursively = (parentId: string, children: ComponentNode[]) => {
+                        children.forEach(child => {
+                          const clonedChild = cloneComponent(child, parentId)
+                          onAddComponent(clonedChild, parentId)
+                          
+                          // Get children of this child
+                          const childChildren = allComponents.filter(c => c.parentId === child.id)
+                          if (childChildren.length > 0) {
+                            cloneChildrenRecursively(clonedChild.id, childChildren)
+                          }
+                        })
+                      }
+                      
+                      // Clone all children
+                      if (componentChildren.length > 0) {
+                        cloneChildrenRecursively(clonedComponent.id, componentChildren)
+                      }
+                      
+                      showToast('Component duplicated successfully', 'success')
+                    }}
+                    disabled={!selectedComponent}
+                    style={{
+                      padding: '0.5rem',
+                      backgroundColor: selectedComponent ? '#10b981' : '#cbd5e0',
+                      color: selectedComponent ? 'white' : '#718096',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: selectedComponent ? 'pointer' : 'not-allowed',
+                      fontSize: '1.2rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      opacity: selectedComponent ? 1 : 0.6,
+                      transition: 'all 0.2s',
+                      minWidth: '36px',
+                      height: '36px'
+                    }}
+                    title={selectedComponent ? 'Duplicate this component' : 'Select a component first'}
+                    onMouseEnter={(e) => {
+                      if (selectedComponent) {
+                        e.currentTarget.style.backgroundColor = '#059669'
+                        e.currentTarget.style.transform = 'scale(1.05)'
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (selectedComponent) {
+                        e.currentTarget.style.backgroundColor = '#10b981'
+                        e.currentTarget.style.transform = 'scale(1)'
+                      }
+                    }}
+                  >
+                    <FiCopy />
+                  </button>
+                )}
+              </div>
+            </div>
+            {selectedComponent && (selectedComponent as ComponentNode).props?.pageId && (
+              <div style={{ padding: '0.5rem 1rem', fontSize: '0.75rem', color: '#666', backgroundColor: '#f7fafc', borderRadius: '4px', marginBottom: '0.5rem' }}>
+                Linked to page: <strong>{pages.find(p => p.id === (selectedComponent as ComponentNode).props?.pageId)?.name || 'Unknown'}</strong>
+              </div>
+            )}
             
             {/* CSS Style Search */}
             <div className="style-search-container">
@@ -2058,7 +3868,7 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
                     <span>
                       {showSearchResults 
                         ? `Found ${filteredProperties.length} properties` 
-                        : `${setProperties.length} set properties`}
+                        : `${filteredProperties.length} CSS properties (${setProperties.length} set)`}
                     </span>
                   </div>
                   <div className="style-properties-list">
@@ -2189,6 +3999,26 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
                                       }}
                                       className="color-picker"
                                     />
+                                    <input
+                                      type="text"
+                                      value={borderColorValue}
+                                      onChange={(e) => {
+                                        const color = e.target.value
+                                        // Update all border colors in a single batch
+                                        const currentStyle = localProps.style || {}
+                                        const newStyle = {
+                                          ...currentStyle,
+                                          borderColor: color,
+                                          borderTopColor: color,
+                                          borderRightColor: color,
+                                          borderBottomColor: color,
+                                          borderLeftColor: color
+                                        }
+                                        handleChange('style', newStyle)
+                                      }}
+                                      placeholder="Enter color..."
+                                      className="color-text-input"
+                                    />
                                   </div>
                                 </div>
                                 <div className="border-color-item">
@@ -2199,6 +4029,13 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
                                       value={borderTopColorValue}
                                       onChange={(e) => handleStyleChange('borderTopColor', e.target.value)}
                                       className="color-picker"
+                                    />
+                                    <input
+                                      type="text"
+                                      value={borderTopColorValue}
+                                      onChange={(e) => handleStyleChange('borderTopColor', e.target.value)}
+                                      placeholder="Enter color..."
+                                      className="color-text-input"
                                     />
                                   </div>
                                 </div>
@@ -2211,6 +4048,13 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
                                       onChange={(e) => handleStyleChange('borderRightColor', e.target.value)}
                                       className="color-picker"
                                     />
+                                    <input
+                                      type="text"
+                                      value={borderRightColorValue}
+                                      onChange={(e) => handleStyleChange('borderRightColor', e.target.value)}
+                                      placeholder="Enter color..."
+                                      className="color-text-input"
+                                    />
                                   </div>
                                 </div>
                                 <div className="border-color-item">
@@ -2222,6 +4066,13 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
                                       onChange={(e) => handleStyleChange('borderBottomColor', e.target.value)}
                                       className="color-picker"
                                     />
+                                    <input
+                                      type="text"
+                                      value={borderBottomColorValue}
+                                      onChange={(e) => handleStyleChange('borderBottomColor', e.target.value)}
+                                      placeholder="Enter color..."
+                                      className="color-text-input"
+                                    />
                                   </div>
                                 </div>
                                 <div className="border-color-item">
@@ -2232,6 +4083,13 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
                                       value={borderLeftColorValue}
                                       onChange={(e) => handleStyleChange('borderLeftColor', e.target.value)}
                                       className="color-picker"
+                                    />
+                                    <input
+                                      type="text"
+                                      value={borderLeftColorValue}
+                                      onChange={(e) => handleStyleChange('borderLeftColor', e.target.value)}
+                                      placeholder="Enter color..."
+                                      className="color-text-input"
                                     />
                                   </div>
                                 </div>
@@ -3525,6 +5383,17 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
                                           }}
                                           className="color-picker"
                                         />
+                                        <input
+                                          type="text"
+                                          value={boxShadowParsed.color || '#000000'}
+                                          onChange={(e) => {
+                                            const newColor = e.target.value
+                                            const newValue = formatShadow(boxShadowParsed.offsetX, boxShadowParsed.offsetY, boxShadowParsed.blur, boxShadowParsed.spread, newColor, true)
+                                            handleStyleChange('boxShadow', newValue)
+                                          }}
+                                          placeholder="Enter color..."
+                                          className="color-text-input"
+                                        />
                                       </div>
                                     </div>
                                   </div>
@@ -3643,6 +5512,17 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
                                           }}
                                           className="color-picker"
                                         />
+                                        <input
+                                          type="text"
+                                          value={textShadowParsed.color || '#000000'}
+                                          onChange={(e) => {
+                                            const newColor = e.target.value
+                                            const newValue = formatShadow(textShadowParsed.offsetX, textShadowParsed.offsetY, textShadowParsed.blur, 0, newColor, false)
+                                            handleStyleChange('textShadow', newValue)
+                                          }}
+                                          placeholder="Enter color..."
+                                          className="color-text-input"
+                                        />
                                       </div>
                                     </div>
                                   </div>
@@ -3755,6 +5635,287 @@ const PropertiesPanel = ({ selectedComponent, allComponents, onUpdate, onSelect,
                         const displayLabel = prop.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())
                         const colorValue = getColorValue(currentValue)
                         
+                        // Special handling for backgroundColor with gradient support
+                        if (prop === 'backgroundColor') {
+                          // Always check the actual component value first (source of truth)
+                          // Then check localProps (for live edits)
+                          // This ensures saved gradients are detected even if localProps isn't updated yet
+                          const componentBgValue = selectedComponent?.props?.style?.[prop] || selectedComponent?.props?.style?.background || ''
+                          const localBgValue = currentValue || ''
+                          // Prioritize localBgValue (current input) over componentBgValue (saved value)
+                          // This ensures the dropdown updates immediately when user types a gradient
+                          const bgValue = localBgValue || componentBgValue
+                          const isGradient = typeof bgValue === 'string' && bgValue.includes('linear-gradient')
+                          
+                          // Always use the actual gradient value to determine type, not just state
+                          // This ensures the dropdown shows correctly even if state hasn't synced yet
+                          // If we detect a gradient in the current value, always show gradient type
+                          const currentBgType = isGradient ? 'gradient' : (backgroundType || 'solid')
+                          
+                          const updateGradient = (direction: string, colors: Array<{color: string, stop: string}>) => {
+                            // Mark that we're editing a gradient to prevent useEffect from interfering
+                            isEditingGradientRef.current = true
+                            const colorStops = colors.map(c => `${c.color} ${c.stop}`).join(', ')
+                            const gradientValue = `linear-gradient(${direction}, ${colorStops})`
+                            handleStyleChange('backgroundColor', gradientValue)
+                            handleStyleChange('background', gradientValue)
+                            // Reset the flag after a delay to allow useEffect to run for other changes
+                            // Use a longer delay to ensure all useEffect runs complete
+                            setTimeout(() => {
+                              isEditingGradientRef.current = false
+                            }, 300)
+                          }
+                          
+                          return (
+                            <div key={prop} className={`property-group color-property ${isSet ? 'property-set' : 'property-unset'}`}>
+                              <div className="property-label-row">
+                                <label>{displayLabel}</label>
+                                {isSet && (
+                                  <button
+                                    className="remove-property-btn"
+                                    onClick={() => {
+                                      handleStyleChange(prop, '')
+                                      handleStyleChange('background', '')
+                                      setBackgroundType('solid')
+                                    }}
+                                    title="Remove property"
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                <span style={{ fontSize: '0.7rem', color: '#666' }}>Type:</span>
+                                <select
+                                  value={currentBgType}
+                                  onChange={(e) => {
+                                    const newType = e.target.value as 'solid' | 'gradient'
+                                    setBackgroundType(newType)
+                                    if (newType === 'solid') {
+                                      handleStyleChange('backgroundColor', '#ffffff')
+                                      handleStyleChange('background', '')
+                                    } else {
+                                      updateGradient(gradientDirection, gradientColors)
+                                    }
+                                  }}
+                                  style={{
+                                    padding: '0.2rem 0.4rem',
+                                    fontSize: '0.7rem',
+                                    border: '1px solid #ddd',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  <option value="solid">Solid Color</option>
+                                  <option value="gradient">Linear Gradient</option>
+                                </select>
+                              </div>
+                              
+                              {currentBgType === 'solid' ? (
+                                <div className="color-input-group">
+                                  <input
+                                    type="color"
+                                    value={colorValue}
+                                    onChange={(e) => handleStyleChange(prop, e.target.value)}
+                                    className="color-picker"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={currentValue}
+                                    onChange={(e) => {
+                                      const newValue = e.target.value
+                                      handleStyleChange(prop, newValue)
+                                      // If user types a gradient, automatically switch to gradient type
+                                      if (typeof newValue === 'string' && newValue.includes('linear-gradient')) {
+                                        setBackgroundType('gradient')
+                                        // Parse and set gradient values if possible
+                                        const match = newValue.match(/linear-gradient\s*\(\s*([^)]+)\s*\)/i)
+                                        if (match) {
+                                          const gradientContent = match[1].trim()
+                                          const parts: string[] = []
+                                          let currentPart = ''
+                                          let parenDepth = 0
+                                          
+                                          for (let i = 0; i < gradientContent.length; i++) {
+                                            const char = gradientContent[i]
+                                            if (char === '(') parenDepth++
+                                            if (char === ')') parenDepth--
+                                            
+                                            if (char === ',' && parenDepth === 0) {
+                                              if (currentPart.trim()) {
+                                                parts.push(currentPart.trim())
+                                                currentPart = ''
+                                              }
+                                            } else {
+                                              currentPart += char
+                                            }
+                                          }
+                                          if (currentPart.trim()) {
+                                            parts.push(currentPart.trim())
+                                          }
+                                          
+                                          const direction = parts[0] && (parts[0].includes('deg') || parts[0].includes('to ')) 
+                                            ? parts[0] 
+                                            : '180deg'
+                                          const colorParts = parts.length > 1 ? parts.slice(1) : parts
+                                          
+                                          const colors = colorParts.map((c: string) => {
+                                            const trimmed = c.trim()
+                                            const stopMatch = trimmed.match(/(.+?)\s+(\d+%?)$/)
+                                            if (stopMatch) {
+                                              return {
+                                                color: stopMatch[1].trim(),
+                                                stop: stopMatch[2].trim()
+                                              }
+                                            }
+                                            return { color: trimmed, stop: '' }
+                                          })
+                                          
+                                          if (colors.length > 0) {
+                                            setGradientDirection(direction)
+                                            setGradientColors(colors)
+                                          }
+                                        }
+                                      }
+                                    }}
+                                    placeholder="Enter color (hex, rgb, name)..."
+                                    className="color-text-input"
+                                  />
+                                </div>
+                              ) : (
+                                <div className="gradient-editor">
+                                  <div style={{ marginBottom: '0.5rem' }}>
+                                    <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.3rem' }}>Direction</label>
+                                    <select
+                                      value={gradientDirection}
+                                      onChange={(e) => {
+                                        const newDirection = e.target.value
+                                        setGradientDirection(newDirection)
+                                        updateGradient(newDirection, gradientColors)
+                                      }}
+                                      style={{
+                                        width: '100%',
+                                        padding: '0.3rem',
+                                        fontSize: '0.75rem',
+                                        border: '1px solid #ddd',
+                                        borderRadius: '4px'
+                                      }}
+                                    >
+                                      <option value="0deg">To Top</option>
+                                      <option value="45deg">To Top Right</option>
+                                      <option value="90deg">To Right</option>
+                                      <option value="135deg">To Bottom Right</option>
+                                      <option value="180deg">To Bottom</option>
+                                      <option value="225deg">To Bottom Left</option>
+                                      <option value="270deg">To Left</option>
+                                      <option value="315deg">To Top Left</option>
+                                    </select>
+                                  </div>
+                                  
+                                  <div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
+                                      <label style={{ fontSize: '0.7rem' }}>Color Stops</label>
+                                      <button
+                                        onClick={() => {
+                                          const newColors = [...gradientColors, { color: '#ffffff', stop: `${gradientColors.length * 50}%` }]
+                                          setGradientColors(newColors)
+                                          updateGradient(gradientDirection, newColors)
+                                        }}
+                                        style={{
+                                          padding: '0.2rem 0.5rem',
+                                          fontSize: '0.7rem',
+                                          backgroundColor: '#667eea',
+                                          color: 'white',
+                                          border: 'none',
+                                          borderRadius: '4px',
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        + Add Color
+                                      </button>
+                                    </div>
+                                    
+                                    {gradientColors.map((colorStop, index) => (
+                                      <div key={index} style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.4rem', alignItems: 'center' }}>
+                                        <input
+                                          type="color"
+                                          value={colorStop.color}
+                                          onChange={(e) => {
+                                            const newColors = [...gradientColors]
+                                            newColors[index].color = e.target.value
+                                            setGradientColors(newColors)
+                                            updateGradient(gradientDirection, newColors)
+                                          }}
+                                          className="color-picker"
+                                          style={{ width: '50px', height: '30px' }}
+                                        />
+                                        <input
+                                          type="text"
+                                          value={colorStop.color}
+                                          onChange={(e) => {
+                                            const newColors = [...gradientColors]
+                                            newColors[index].color = e.target.value
+                                            setGradientColors(newColors)
+                                            updateGradient(gradientDirection, newColors)
+                                          }}
+                                          placeholder="#ffffff"
+                                          style={{
+                                            flex: 1,
+                                            padding: '0.3rem',
+                                            fontSize: '0.75rem',
+                                            border: '1px solid #ddd',
+                                            borderRadius: '4px'
+                                          }}
+                                        />
+                                        <input
+                                          type="text"
+                                          value={colorStop.stop}
+                                          onChange={(e) => {
+                                            const newColors = [...gradientColors]
+                                            newColors[index].stop = e.target.value
+                                            setGradientColors(newColors)
+                                            updateGradient(gradientDirection, newColors)
+                                          }}
+                                          placeholder="0%"
+                                          style={{
+                                            width: '60px',
+                                            padding: '0.3rem',
+                                            fontSize: '0.75rem',
+                                            border: '1px solid #ddd',
+                                            borderRadius: '4px',
+                                            textAlign: 'center'
+                                          }}
+                                        />
+                                        {gradientColors.length > 2 && (
+                                          <button
+                                            onClick={() => {
+                                              const newColors = gradientColors.filter((_, i) => i !== index)
+                                              setGradientColors(newColors)
+                                              updateGradient(gradientDirection, newColors)
+                                            }}
+                                            style={{
+                                              padding: '0.2rem 0.4rem',
+                                              fontSize: '0.7rem',
+                                              backgroundColor: '#e74c3c',
+                                              color: 'white',
+                                              border: 'none',
+                                              borderRadius: '4px',
+                                              cursor: 'pointer'
+                                            }}
+                                          >
+                                            ×
+                                          </button>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        }
+                        
+                        // Regular color property (not backgroundColor)
                         return (
                           <div key={prop} className={`property-group color-property ${isSet ? 'property-set' : 'property-unset'}`}>
                             <div className="property-label-row">

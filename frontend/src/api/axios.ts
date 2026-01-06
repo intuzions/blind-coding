@@ -43,7 +43,10 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean }
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // Skip auth refresh for settings endpoints during initial setup
+    const isSettingsEndpoint = originalRequest.url?.includes('/settings')
+    
+    if (error.response?.status === 401 && !originalRequest._retry && !isSettingsEndpoint) {
       if (isRefreshing) {
         // If already refreshing, queue this request
         return new Promise((resolve, reject) => {

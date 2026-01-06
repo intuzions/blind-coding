@@ -7,11 +7,12 @@ import { fetchProject, updateProject } from '../store/slices/projectSlice'
 import Canvas from '../components/Editor/Canvas'
 import ComponentLibrary from '../components/Editor/ComponentLibrary'
 import PropertiesPanel from '../components/Editor/PropertiesPanel'
-import ImageUploadModal from '../components/Editor/ImageUploadModal'
-import AIDevelopmentAssistant from '../components/Editor/AIDevelopmentAssistant'
+import MovableAIPromptBox from '../components/Editor/MovableAIPromptBox'
 import RenderComponent from '../components/Editor/RenderComponent'
 import ProgressBar from '../components/ProgressBar'
-import { ComponentNode } from '../types/editor'
+import SavePageModal from '../components/Editor/SavePageModal'
+import WorkflowViewerModal from '../components/Editor/WorkflowViewerModal'
+import { ComponentNode, Page } from '../types/editor'
 import { FiSave, FiArrowLeft, FiEye, FiGrid, FiSidebar, FiX, FiZap } from 'react-icons/fi'
 import { analyzeImageAndGenerateComponents } from '../services/imageAnalysis'
 import { useToast } from '../components/Toast'
@@ -26,16 +27,20 @@ const Editor = () => {
 
   const [components, setComponents] = useState<ComponentNode[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [pages, setPages] = useState<Page[]>([])
+  const [currentPageId, setCurrentPageId] = useState<string | null>(null)
   const [showPreview, setShowPreview] = useState(false)
   const [showGrid, setShowGrid] = useState(false)
   const [gridSize, setGridSize] = useState(20)
   const [showComponentLibrary, setShowComponentLibrary] = useState(true)
   const [showPropertiesPanel, setShowPropertiesPanel] = useState(true)
-  const [showImageUpload, setShowImageUpload] = useState(false)
-  const [showAIAssistant, setShowAIAssistant] = useState(false)
+  const [showMovableAIPrompt, setShowMovableAIPrompt] = useState(false)
   const [saveProgress, setSaveProgress] = useState(0)
   const [saveMessage, setSaveMessage] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const [showSavePageModal, setShowSavePageModal] = useState(false)
+  const [showWorkflowViewer, setShowWorkflowViewer] = useState(false)
+  const [workflowData, setWorkflowData] = useState<{ connections: any[]; pagePositions: { [pageId: string]: { x: number; y: number } } } | null>(null)
 
   useEffect(() => {
     if (projectId) {
@@ -72,6 +77,9 @@ const Editor = () => {
     // Create project configuration as JSON
     const projectConfiguration = {
       components: allComponents, // Save all components, not just root
+      pages: pages, // Save pages
+      currentPageId: currentPageId, // Save current page
+      workflow: workflowData || null, // Save workflow data (connections and page positions)
       editorSettings: {
         showGrid,
         gridSize,
@@ -149,7 +157,7 @@ const Editor = () => {
       setSaveMessage('')
       showToast('Failed to save project', 'error')
     }
-  }, [dispatch, projectId, currentProject, components, showGrid, gridSize, showComponentLibrary, showPropertiesPanel, showPreview])
+  }, [dispatch, projectId, currentProject, components, pages, currentPageId, showGrid, gridSize, showComponentLibrary, showPropertiesPanel, showPreview])
 
   // Listen for events from navbar
   useEffect(() => {
@@ -163,10 +171,11 @@ const Editor = () => {
       setShowPropertiesPanel(e.detail?.show ?? !showPropertiesPanel)
     }
     const handleOpenAIAssistant = () => {
-      setShowAIAssistant(true)
+      // Open the movable AI prompt box
+      setShowMovableAIPrompt(true)
     }
-    const handleOpenImageUpload = () => {
-      setShowImageUpload(true)
+    const handleOpenSavePageModal = () => {
+      setShowSavePageModal(true)
     }
     const handleToggleGrid = (e: CustomEvent) => {
       setShowGrid(e.detail?.show ?? !showGrid)
@@ -186,8 +195,8 @@ const Editor = () => {
     }
     
     window.addEventListener('togglePreview', handleTogglePreview as EventListener)
-    window.addEventListener('openImageUpload', handleOpenImageUpload as EventListener)
     window.addEventListener('openAIAssistant', handleOpenAIAssistant as EventListener)
+    window.addEventListener('openSavePageModal', handleOpenSavePageModal as EventListener)
     window.addEventListener('customMarksGenerated', handleCustomMarksGenerated as EventListener)
     window.addEventListener('toggleComponentLibrary', handleToggleComponentLibrary as EventListener)
     window.addEventListener('togglePropertiesPanel', handleTogglePropertiesPanel as EventListener)
@@ -197,8 +206,8 @@ const Editor = () => {
     
     return () => {
       window.removeEventListener('togglePreview', handleTogglePreview as EventListener)
-      window.removeEventListener('openImageUpload', handleOpenImageUpload as EventListener)
       window.removeEventListener('openAIAssistant', handleOpenAIAssistant as EventListener)
+      window.removeEventListener('openSavePageModal', handleOpenSavePageModal as EventListener)
       window.removeEventListener('customMarksGenerated', handleCustomMarksGenerated as EventListener)
       window.removeEventListener('toggleComponentLibrary', handleToggleComponentLibrary as EventListener)
       window.removeEventListener('togglePropertiesPanel', handleTogglePropertiesPanel as EventListener)
@@ -227,6 +236,13 @@ const Editor = () => {
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('editorPreviewToggle', { detail: { show: showPreview } }))
+  }, [showPreview])
+
+  // Hide AI assistant when preview is shown
+  useEffect(() => {
+    if (showPreview && showMovableAIPrompt) {
+      setShowMovableAIPrompt(false)
+    }
   }, [showPreview])
 
   // Load project configuration when project is loaded
@@ -328,6 +344,27 @@ const Editor = () => {
             setComponents(() => validComponents)
           }
 
+          // Restore pages from configuration
+          if (config.pages && Array.isArray(config.pages) && config.pages.length > 0) {
+            setPages(config.pages)
+            // Set current page to first page or null
+            if (config.currentPageId) {
+              setCurrentPageId(config.currentPageId)
+            } else {
+              setCurrentPageId(config.pages[0].id)
+            }
+          } else {
+            // Create default page if no pages exist
+            const defaultPage: Page = {
+              id: `page-default-${Date.now()}`,
+              name: `Page ${Date.now().toString().slice(-6)}`,
+              route: '/',
+              componentIds: []
+            }
+            setPages([defaultPage])
+            setCurrentPageId(defaultPage.id)
+          }
+
           // Restore editor settings from configuration
           if (config.editorSettings) {
             if (config.editorSettings.showGrid !== undefined) setShowGrid(config.editorSettings.showGrid)
@@ -335,6 +372,15 @@ const Editor = () => {
             if (config.editorSettings.showComponentLibrary !== undefined) setShowComponentLibrary(config.editorSettings.showComponentLibrary)
             if (config.editorSettings.showPropertiesPanel !== undefined) setShowPropertiesPanel(config.editorSettings.showPropertiesPanel)
             if (config.editorSettings.showPreview !== undefined) setShowPreview(config.editorSettings.showPreview)
+          }
+
+          // Restore workflow data from configuration
+          if (config.workflow) {
+            console.log('Loading workflow data from configuration:', config.workflow)
+            setWorkflowData(config.workflow)
+          } else {
+            console.log('No workflow data found in configuration')
+            setWorkflowData(null)
           }
         } catch (error) {
           console.error('Failed to parse project configuration:', error)
@@ -375,15 +421,34 @@ const Editor = () => {
     }
   }, [currentProject])
 
+  // Create default page if no pages exist (separate effect to avoid dependency issues)
+  useEffect(() => {
+    if (pages.length === 0 && currentProject) {
+      const defaultPage: Page = {
+        id: `page-default-${Date.now()}`,
+        name: `Page ${Date.now().toString().slice(-6)}`,
+        route: '/',
+        componentIds: []
+      }
+      setPages([defaultPage])
+      setCurrentPageId(defaultPage.id)
+    }
+  }, [currentProject, pages.length])
+
   const handleAddComponent = useCallback((component: ComponentNode, parentId?: string) => {
     setComponents((prev) => {
       const newComponent = {
         ...component,
         parentId: parentId || undefined,
+        // Assign component to current page if no pageId is set
+        props: {
+          ...component.props,
+          pageId: component.props?.pageId || currentPageId || undefined,
+        },
       }
       return [...prev, newComponent]
     })
-  }, [])
+  }, [currentPageId])
 
   const handleAddAIComponent = useCallback((aiComponent: any) => {
     // Convert AI-generated component structure to ComponentNode format
@@ -403,6 +468,9 @@ const Editor = () => {
       if (Array.isArray(props.children)) {
         delete props.children
       }
+      
+      // Assign to current page
+      props.pageId = currentPageId || undefined
       
       // Ensure form elements have visible default styles
       if (comp.type === 'form' && (!props.style || Object.keys(props.style).length === 0)) {
@@ -463,10 +531,38 @@ const Editor = () => {
       return allComponents
     }
 
+    // Handle arrays (for pages with multiple root components)
+    if (Array.isArray(aiComponent)) {
+      const allPageComponents: ComponentNode[] = []
+      aiComponent.forEach((comp: any) => {
+        const converted = convertAIComponent(comp)
+        allPageComponents.push(...converted)
+      })
+      setComponents((prev) => [...prev, ...allPageComponents])
+      // Auto-select the first root component
+      const firstRootComponent = allPageComponents.find(c => !c.parentId)
+      if (firstRootComponent) {
+        setSelectedId(firstRootComponent.id)
+      }
+      console.log('AI Page added:', {
+        sections: aiComponent.length,
+        totalComponents: allPageComponents.length
+      })
+      showToast(`AI-generated page with ${aiComponent.length} sections added to canvas!`, 'success')
+      return
+    }
+
+    // Handle single component
     const allComponents = convertAIComponent(aiComponent)
     
     // Add all components at once
     setComponents((prev) => [...prev, ...allComponents])
+    
+    // Auto-select the root component so user can immediately edit it
+    const rootComponent = allComponents.find(c => !c.parentId) || allComponents[0]
+    if (rootComponent) {
+      setSelectedId(rootComponent.id)
+    }
     
     console.log('AI Component added:', {
       root: allComponents[0],
@@ -475,11 +571,17 @@ const Editor = () => {
     })
     
     showToast('AI-generated component added to canvas!', 'success')
-  }, [showToast])
+  }, [showToast, currentPageId])
 
   const handleUpdateComponent = useCallback((id: string, updates: Partial<ComponentNode>) => {
-    setComponents((prev) =>
-      prev.map((comp) => {
+    setComponents((prev) => {
+      const componentExists = prev.some(comp => comp.id === id)
+      if (!componentExists) {
+        console.warn(`Component with id ${id} not found. Cannot update.`)
+        return prev
+      }
+      
+      return prev.map((comp) => {
         if (comp.id === id) {
           // Deep merge props, especially style object
           const mergedComp = { ...comp, ...updates }
@@ -493,12 +595,27 @@ const Editor = () => {
                 ...(updates.props.style || {})
               }
             }
+            // Remove properties that are explicitly set to undefined or null
+            Object.keys(mergedComp.props).forEach(key => {
+              if (mergedComp.props[key] === undefined || mergedComp.props[key] === null) {
+                delete mergedComp.props[key]
+              }
+            })
+          } else if (updates.props) {
+            // If comp.props doesn't exist but updates.props does, use updates.props
+            mergedComp.props = { ...updates.props }
+            // Remove undefined/null properties
+            Object.keys(mergedComp.props).forEach(key => {
+              if (mergedComp.props[key] === undefined || mergedComp.props[key] === null) {
+                delete mergedComp.props[key]
+              }
+            })
           }
           return mergedComp
         }
         return comp
       })
-    )
+    })
   }, [])
 
   const handleDeleteComponent = useCallback((id: string) => {
@@ -514,6 +631,296 @@ const Editor = () => {
       setSelectedId(null)
     }
   }, [selectedId])
+
+  const handleCreatePage = useCallback((componentId: string | '', pageName: string) => {
+    const pageId = `page-${Date.now()}-${Math.random().toString(36).substring(7)}`
+    const route = `/${pageName.toLowerCase().replace(/\s+/g, '-')}`
+    
+    // Get the current page ID before creating new page
+    const previousPageId = currentPageId
+    
+    const newPage: Page = {
+      id: pageId,
+      name: pageName,
+      route: route,
+      componentIds: [], // New page starts blank
+    }
+    
+    setPages((prev) => [...prev, newPage])
+    
+    // Ensure all components on the previous page have their pageId set
+    // This prevents them from being lost when switching pages
+    // Components without pageId belong to the current page (previousPageId)
+    // DO NOT move any existing components to the new page - keep them on their current page
+    setComponents((prev) => {
+      return prev.map((comp) => {
+        // If component doesn't have pageId, it belongs to the current page
+        // Set it explicitly to preserve it on the old page
+        if (previousPageId && !comp.props?.pageId) {
+          return {
+            ...comp,
+            props: {
+              ...comp.props,
+              pageId: previousPageId,
+            },
+          }
+        }
+        // Keep all existing components on their current pages
+        // Do NOT move the selected component to the new page
+        // The new page should be blank
+        return comp
+      })
+    })
+    
+    // Switch to the new page (which is blank)
+    setCurrentPageId(pageId)
+    
+    showToast(`Page "${pageName}" created!`, 'success')
+    return pageId
+  }, [showToast, currentPageId])
+
+  const handleNavigateToPage = useCallback((pageId: string) => {
+    setCurrentPageId(pageId)
+    const page = pages.find((p) => p.id === pageId)
+    if (page) {
+      showToast(`Navigated to page: ${page.name}`, 'info')
+    }
+  }, [pages, showToast])
+
+  const handlePageRename = useCallback(async (pageId: string, newName: string) => {
+    const updatedPages = pages.map((page) =>
+      page.id === pageId
+        ? {
+            ...page,
+            name: newName,
+            route: `/${newName.toLowerCase().replace(/\s+/g, '-')}`,
+          }
+        : page
+    )
+    
+    // Update local state
+    setPages(updatedPages)
+    
+    // Auto-save pages to backend after rename
+    if (projectId && currentProject) {
+      try {
+        const projectConfiguration = {
+          components: components.map(comp => ({
+            id: comp.id,
+            type: comp.type,
+            props: comp.props || {},
+            parentId: comp.parentId || undefined,
+          })),
+          pages: updatedPages, // Use updated pages
+          currentPageId: currentPageId,
+          workflow: workflowData || null, // Include workflow data
+          editorSettings: {
+            showGrid,
+            gridSize,
+            showComponentLibrary,
+            showPropertiesPanel,
+            showPreview,
+          },
+          metadata: {
+            savedAt: new Date().toISOString(),
+            componentCount: components.length,
+          },
+        }
+        
+        await dispatch(
+          updateProject({
+            id: parseInt(projectId),
+            data: {
+              html_content: currentProject.html_content || '',
+              css_content: currentProject.css_content || '',
+              component_tree: currentProject.component_tree || [],
+              configuration: projectConfiguration,
+            },
+          })
+        ).unwrap()
+      } catch (error) {
+        console.error('Failed to auto-save page rename:', error)
+        showToast('Page renamed locally, but failed to save to backend', 'warning')
+      }
+    }
+    
+    showToast(`Page renamed to "${newName}"`, 'success')
+  }, [showToast, projectId, currentProject, components, pages, currentPageId, showGrid, gridSize, showComponentLibrary, showPropertiesPanel, showPreview, dispatch])
+
+  const handlePageDelete = useCallback((pageId: string) => {
+    // Find the page to delete
+    const pageToDelete = pages.find(p => p.id === pageId)
+    if (!pageToDelete) return
+
+    // Don't allow deleting if it's the only page
+    if (pages.length <= 1) {
+      showToast('Cannot delete the last page', 'error')
+      return
+    }
+
+    // Delete all components on this page
+    setComponents((prevComponents) => {
+      // Get all component IDs on this page
+      const componentIdsOnPage = prevComponents
+        .filter(comp => comp.props?.pageId === pageId)
+        .map(comp => comp.id)
+      
+      // Delete all components and their children recursively
+      const idsToDelete = new Set<string>()
+      const deleteRecursive = (compId: string) => {
+        idsToDelete.add(compId)
+        prevComponents.forEach(comp => {
+          if (comp.parentId === compId) {
+            deleteRecursive(comp.id)
+          }
+        })
+      }
+      
+      componentIdsOnPage.forEach(id => deleteRecursive(id))
+      
+      // Clear selection if selected component was on deleted page
+      if (selectedId && idsToDelete.has(selectedId)) {
+        setSelectedId(null)
+      }
+      
+      return prevComponents.filter(comp => !idsToDelete.has(comp.id))
+    })
+
+    // Remove the page
+    setPages((prevPages) => prevPages.filter(page => page.id !== pageId))
+
+    // If we deleted the current page, switch to another page
+    if (currentPageId === pageId) {
+      const remainingPages = pages.filter(p => p.id !== pageId)
+      if (remainingPages.length > 0) {
+        setCurrentPageId(remainingPages[0].id)
+        showToast(`Page "${pageToDelete.name}" deleted. Switched to "${remainingPages[0].name}"`, 'success')
+      }
+    } else {
+      showToast(`Page "${pageToDelete.name}" deleted`, 'success')
+    }
+  }, [pages, currentPageId, selectedId, showToast])
+
+  const handleSavePage = useCallback((pageData: { name: string; description: string; page: Page; components: ComponentNode[] }) => {
+    try {
+      // Get existing saved pages from localStorage
+      const savedPagesKey = 'savedCustomPages'
+      const existingPages = JSON.parse(localStorage.getItem(savedPagesKey) || '[]')
+      
+      // Create deep copy of components to ensure exact copy without any modifications
+      // The components are already filtered by pageId in SavePageModal, so use them as-is
+      const pageComponents = pageData.components.map(comp => {
+        // Create a deep copy using JSON parse/stringify to ensure complete copy
+        const componentCopy = JSON.parse(JSON.stringify(comp))
+        // Remove pageId from saved components so they can be assigned to any page when restored
+        if (componentCopy.props) {
+          delete componentCopy.props.pageId
+        }
+        return componentCopy
+      })
+      
+      // Create saved page object with exact component copy
+      const savedPage = {
+        id: `saved-page-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+        name: pageData.name,
+        description: pageData.description,
+        page: {
+          name: pageData.page.name,
+          route: pageData.page.route,
+          // Don't save the actual page ID
+        },
+        components: pageComponents, // Exact copy of components without pageId
+        createdAt: new Date().toISOString()
+      }
+      
+      // Add to existing pages
+      existingPages.push(savedPage)
+      
+      // Save back to localStorage
+      localStorage.setItem(savedPagesKey, JSON.stringify(existingPages))
+      
+      // Dispatch event to refresh saved pages in PreBuiltComponentsModal
+      window.dispatchEvent(new CustomEvent('pageSaved'))
+      
+      showToast(`Page "${pageData.name}" saved to pre-built pages!`, 'success')
+    } catch (error) {
+      console.error('Error saving page:', error)
+      showToast('Failed to save page', 'error')
+    }
+  }, [showToast])
+
+  const handleComponentClick = useCallback((componentId: string) => {
+    const component = components.find((c) => c.id === componentId)
+    if (component?.props?.pageId) {
+      handleNavigateToPage(component.props.pageId)
+    }
+  }, [components, handleNavigateToPage])
+
+  const handleReorderComponent = useCallback((draggedId: string, targetId: string, position: 'before' | 'after' | 'inside') => {
+    setComponents((prev) => {
+      const dragged = prev.find(c => c.id === draggedId)
+      const target = prev.find(c => c.id === targetId)
+      
+      if (!dragged || !target) {
+        console.warn('Reorder failed: dragged or target component not found', { draggedId, targetId })
+        return prev
+      }
+      
+      // Prevent dropping on itself
+      if (draggedId === targetId) {
+        return prev
+      }
+      
+      // If dropping inside, just reparent
+      if (position === 'inside') {
+        // Prevent circular parent-child relationships
+        const isDescendant = (parentId: string, childId: string): boolean => {
+          const child = prev.find(c => c.id === childId)
+          if (!child || !child.parentId) return false
+          if (child.parentId === parentId) return true
+          return isDescendant(parentId, child.parentId)
+        }
+        
+        if (isDescendant(draggedId, targetId)) {
+          console.warn('Cannot move component into its own descendant')
+          return prev
+        }
+        
+        return prev.map(comp => 
+          comp.id === draggedId ? { ...comp, parentId: targetId } : comp
+        )
+      }
+      
+      // For reordering (before/after), we need to maintain array order
+      // Components are rendered in array order, so we need to reorder the array
+      const targetParentId = target.parentId
+      
+      // Step 1: Update dragged component's parent to match target's parent
+      let newComponents = prev.map(comp => 
+        comp.id === draggedId ? { ...comp, parentId: targetParentId } : comp
+      )
+      
+      // Step 2: Remove dragged component from array
+      const draggedComponent = newComponents.find(c => c.id === draggedId)!
+      newComponents = newComponents.filter(c => c.id !== draggedId)
+      
+      // Step 3: Find target's position in the array (after removing dragged)
+      const targetIndex = newComponents.findIndex(c => c.id === targetId)
+      
+      if (targetIndex === -1) {
+        console.warn('Reorder failed: target not found after removing dragged', { targetId })
+        return prev
+      }
+      
+      // Step 4: Calculate insert position
+      const insertIndex = position === 'before' ? targetIndex : targetIndex + 1
+      
+      // Step 5: Insert dragged component at the correct position
+      newComponents.splice(insertIndex, 0, draggedComponent)
+      
+      return newComponents
+    })
+  }, [])
 
   const handleImageUpload = useCallback(async (file: File) => {
     try {
@@ -594,9 +1001,37 @@ const Editor = () => {
   const PreviewRenderer = ({ components, cssContent }: { components: ComponentNode[], cssContent: string }) => {
     const rootComponents = components.filter((c) => !c.parentId)
     
+    // Collect all custom CSS from all components
+    const allCustomCSS = useMemo(() => {
+      const customCSSArray: string[] = []
+      components.forEach((comp) => {
+        if (comp.props?.customCSS) {
+          const componentClass = `component-${comp.id.replace(/[^a-zA-Z0-9]/g, '-')}`
+          let scopedCSS = comp.props.customCSS.trim()
+          
+          // Scope the CSS to this component's class
+          const pseudoClassPattern = /(^|\n)(\s*)(:hover|:active|:focus|:before|:after|:first-child|:last-child|:nth-child\([^)]*\)|::before|::after)\s*\{/gi
+          scopedCSS = scopedCSS.replace(pseudoClassPattern, (match, prefix, indent, pseudoClass) => {
+            return `${prefix}${indent}.${componentClass}${pseudoClass} {`
+          })
+          
+          // If no pseudo-classes were found and CSS doesn't already have a scoped selector, wrap it
+          if (!scopedCSS.includes(`.${componentClass}`)) {
+            if (!scopedCSS.match(/^[.#\w]/)) {
+              scopedCSS = `.${componentClass} {\n${scopedCSS}\n}`
+            }
+          }
+          
+          customCSSArray.push(scopedCSS)
+        }
+      })
+      return customCSSArray.join('\n\n')
+    }, [components])
+    
     return (
-      <div className="preview-renderer">
+      <div className="preview-renderer" style={{ width: '100%', height: '100%', padding: 0, margin: 0 }}>
         <style>{cssContent}</style>
+        {allCustomCSS && <style dangerouslySetInnerHTML={{ __html: allCustomCSS }} />}
         {rootComponents.map((comp) => (
           <RenderComponent
             key={`${comp.id}-${JSON.stringify(comp.props)}`}
@@ -648,17 +1083,28 @@ const Editor = () => {
               onAdd={handleAddComponent}
               showGrid={showGrid}
               gridSize={gridSize}
+              pages={pages}
+              currentPageId={currentPageId}
+              onPageChange={handleNavigateToPage}
+              onPageRename={handlePageRename}
+              onPageDelete={handlePageDelete}
+              onCreatePage={handleCreatePage}
+              onOpenWorkflowViewer={() => setShowWorkflowViewer(true)}
             />
           </div>
           {showPropertiesPanel && (
-            <PropertiesPanel
-              selectedComponent={selectedComponent}
-              allComponents={components}
-              onUpdate={handleUpdateComponent}
-              onSelect={setSelectedId}
-              onDelete={handleDeleteComponent}
-              onAddComponent={handleAddComponent}
-            />
+          <PropertiesPanel
+            selectedComponent={selectedComponent}
+            allComponents={components}
+            onUpdate={handleUpdateComponent}
+            onSelect={setSelectedId}
+            onDelete={handleDeleteComponent}
+            onAddComponent={handleAddComponent}
+            onReorder={handleReorderComponent}
+            pages={pages}
+            currentPageId={currentPageId}
+            projectId={currentProject?.id}
+          />
           )}
         </div>
 
@@ -676,18 +1122,120 @@ const Editor = () => {
           </div>
         )}
 
-        <ImageUploadModal
-          isOpen={showImageUpload}
-          onClose={() => setShowImageUpload(false)}
-          onUpload={handleImageUpload}
-        />
+        {showMovableAIPrompt && !showPreview && (
+          <MovableAIPromptBox
+            onAddComponent={handleAddAIComponent}
+            onUpdate={handleUpdateComponent}
+            onSelect={setSelectedId}
+            existingComponents={components}
+            selectedComponent={components.find(c => c.id === selectedId) || null}
+            frontendFramework={currentProject?.frontend_framework}
+            backendFramework={currentProject?.backend_framework}
+            onClose={() => setShowMovableAIPrompt(false)}
+            projectId={currentProject?.id}
+          />
+        )}
 
-        <AIDevelopmentAssistant
-          isOpen={showAIAssistant}
-          onClose={() => setShowAIAssistant(false)}
-          onAddComponent={handleAddAIComponent}
-          existingComponents={components}
-        />
+        {showSavePageModal && (
+          <SavePageModal
+            isOpen={showSavePageModal}
+            onClose={() => setShowSavePageModal(false)}
+            onSave={handleSavePage}
+            currentPage={pages.find(p => p.id === currentPageId) || null}
+            pageComponents={(() => {
+              // Get all components that belong to this page (including nested children)
+              const pageId = currentPageId
+              if (!pageId) return []
+              
+              // First, get all components with matching pageId
+              const directPageComponents = components.filter(c => c.props?.pageId === pageId)
+              
+              // Then, recursively find all children of these components
+              const allPageComponents = new Set<string>()
+              const componentMap = new Map(components.map(c => [c.id, c]))
+              
+              const collectChildren = (compId: string) => {
+                if (allPageComponents.has(compId)) return
+                allPageComponents.add(compId)
+                
+                // Find all children of this component
+                components.forEach(child => {
+                  if (child.parentId === compId) {
+                    collectChildren(child.id)
+                  }
+                })
+              }
+              
+              // Start with root components (no parentId) that belong to this page
+              directPageComponents.forEach(comp => {
+                collectChildren(comp.id)
+              })
+              
+              // Return all collected components in the same order as original
+              return components.filter(c => allPageComponents.has(c.id))
+            })()}
+          />
+        )}
+
+        {showWorkflowViewer && (
+          <WorkflowViewerModal
+            isOpen={showWorkflowViewer}
+            onClose={() => setShowWorkflowViewer(false)}
+            pages={pages}
+            components={components}
+            currentPageId={currentPageId}
+            onSave={async (workflowDataToSave) => {
+              // Save workflow data to project configuration
+              setWorkflowData(workflowDataToSave)
+              
+              if (projectId && currentProject) {
+                try {
+                  // Update project configuration with workflow data
+                  const projectConfiguration = {
+                    components: components.map(comp => ({
+                      id: comp.id,
+                      type: comp.type,
+                      props: comp.props || {},
+                      parentId: comp.parentId || undefined,
+                    })),
+                    pages: pages,
+                    currentPageId: currentPageId,
+                    workflow: workflowDataToSave, // Save workflow data
+                    editorSettings: {
+                      showGrid,
+                      gridSize,
+                      showComponentLibrary,
+                      showPropertiesPanel,
+                      showPreview,
+                    },
+                    metadata: {
+                      savedAt: new Date().toISOString(),
+                      componentCount: components.length,
+                    },
+                  }
+                  
+                  await dispatch(
+                    updateProject({
+                      id: parseInt(projectId),
+                      data: {
+                        html_content: currentProject.html_content || '',
+                        css_content: currentProject.css_content || '',
+                        component_tree: currentProject.component_tree || [],
+                        configuration: projectConfiguration,
+                      },
+                    })
+                  ).unwrap()
+                  
+                  showToast('Workflow saved successfully!', 'success')
+                } catch (error) {
+                  console.error('Failed to save workflow:', error)
+                  showToast('Failed to save workflow to database', 'error')
+                }
+              }
+            }}
+            savedWorkflowData={workflowData}
+          />
+        )}
       </div>
     </DndProvider>
   )

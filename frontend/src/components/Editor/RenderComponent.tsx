@@ -281,11 +281,14 @@ const RenderComponent = ({
       eventHandlers.onClick = handleClick
     }
 
+    // Generate unique class name for custom CSS scoping
+    const componentClass = `component-${component.id.replace(/[^a-zA-Z0-9]/g, '-')}`
+    
     // Preserve all props including non-style properties
     const elementProps: any = {
       ...props,
       style: finalStyle,
-      className: `${props?.className || ''} ${isSelected ? 'selected' : ''}`.trim(),
+      className: `${props?.className || ''} ${componentClass} ${isSelected ? 'selected' : ''}`.trim(),
       ...eventHandlers,
     }
     
@@ -753,8 +756,52 @@ const RenderComponent = ({
     ...(isMainOrForm && isSelected ? { 'data-main-form-selected': 'true' } : {})
   }
   
+  // Inject custom CSS if it exists
+  const customCSS = component.props?.customCSS
+  const injectCustomCSS = () => {
+    if (!customCSS) return null
+    
+    // Generate a unique class name for this component (must match the one in renderElement)
+    const componentClass = `component-${component.id.replace(/[^a-zA-Z0-9]/g, '-')}`
+    
+    // Scope the CSS to this component's class
+    let scopedCSS = customCSS.trim()
+    
+    // Pattern to match pseudo-class selectors at the start of line or string
+    // Matches: ":hover {", ":hover{", "  :hover {", etc.
+    const pseudoClassPattern = /(^|\n)(\s*)(:hover|:active|:focus|:before|:after|:first-child|:last-child|:nth-child\([^)]*\)|::before|::after)\s*\{/gi
+    
+    // Replace pseudo-class selectors with scoped versions
+    scopedCSS = scopedCSS.replace(pseudoClassPattern, (match, prefix, indent, pseudoClass) => {
+      return `${prefix}${indent}.${componentClass}${pseudoClass} {`
+    })
+    
+    // If no pseudo-classes were found and CSS doesn't already have a scoped selector, wrap it
+    if (!scopedCSS.includes(`.${componentClass}`)) {
+      // Check if it starts with a pseudo-class (already handled above, but double-check)
+      if (!scopedCSS.match(/^[.#\w]/)) {
+        // It doesn't start with a class/id selector, wrap in component class
+        scopedCSS = `.${componentClass} {\n${scopedCSS}\n}`
+      }
+    }
+    
+    // Debug: Log the scoped CSS in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[RenderComponent] Injecting CSS for component ${component.id}:`, {
+        original: customCSS,
+        scoped: scopedCSS,
+        componentClass
+      })
+    }
+    
+    return (
+      <style dangerouslySetInnerHTML={{ __html: scopedCSS }} />
+    )
+  }
+  
   return (
     <div {...wrapperProps}>
+      {injectCustomCSS()}
       {renderElement()}
     </div>
   )

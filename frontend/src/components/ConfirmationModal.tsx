@@ -83,7 +83,23 @@ export const ConfirmationProvider: React.FC<{ children: React.ReactNode }> = ({ 
               </button>
             </div>
             <div className="confirmation-modal-body">
-              <p className="confirmation-modal-message">{options.message}</p>
+              <div 
+                className="confirmation-modal-message" 
+                style={{ 
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'monospace',
+                  fontSize: '0.85rem',
+                  lineHeight: '1.6',
+                  maxHeight: '60vh',
+                  overflowY: 'auto',
+                  padding: '1rem',
+                  background: '#f8f9fa',
+                  borderRadius: '4px',
+                  border: '1px solid #e0e0e0'
+                }}
+              >
+                {options.message}
+              </div>
             </div>
             <div className="confirmation-modal-footer">
               <button
@@ -105,6 +121,8 @@ export const ConfirmationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     </ConfirmationContext.Provider>
   )
 }
+
+
 
 
 

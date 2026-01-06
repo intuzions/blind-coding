@@ -109,9 +109,15 @@ USE_OLLAMA=true
 # Ollama server URL (default: http://localhost:11434)
 OLLAMA_URL=http://localhost:11434
 
-# Ollama model to use (default: llama2)
-# Options: llama2, llama2:13b, mistral, codellama, llama3, etc.
-OLLAMA_MODEL=llama2
+# Ollama model to use (default: deepseek-coder:6.7b - RECOMMENDED for best accuracy)
+# Options: 
+#   deepseek-coder:6.7b (RECOMMENDED - best accuracy)
+#   qwen2.5-coder:7b (excellent alternative)
+#   codellama:13b (good quality)
+#   codellama:7b (faster)
+#   mistral:7b (fast)
+#   llama3:8b (general purpose)
+OLLAMA_MODEL=deepseek-coder:6.7b
 ```
 
 ### 3. Priority Order
@@ -211,10 +217,20 @@ ollama pull llama2
 - **llama2** or **llama3** (7B) - Good balance of speed and quality
 - **mistral** - Fast and efficient
 
-### For Code Generation (AI Development)
-- **codellama** - Optimized for code
-- **llama3** - General purpose, good for code
-- **mistral** - Fast code generation
+### For Code Generation (AI Development) - RECOMMENDED
+- **deepseek-coder:6.7b** - BEST for code generation (NEW DEFAULT) ⭐
+  - Highest accuracy for component generation
+  - Excellent JSON structure understanding
+  - Best for React/Vue/Angular components
+  - Install: `ollama pull deepseek-coder:6.7b`
+- **qwen2.5-coder:7b** - Excellent alternative
+  - Great code understanding
+  - Good for complex components
+  - Install: `ollama pull qwen2.5-coder:7b`
+- **codellama:13b** - Good quality, stable
+- **codellama:7b** - Faster, good for quick generation
+- **mistral:7b** - Fast code generation
+- **llama3:8b** - General purpose, good for code
 
 ### For Best Quality
 - **llama2:13b** or **llama3:70b** - Higher quality but slower
@@ -271,10 +287,17 @@ payload = {
 ## Next Steps
 
 1. Install Ollama
-2. Pull a model (recommended: `llama2` or `llama3`)
-3. Set `USE_OLLAMA=true` in backend `.env`
+2. Pull CodeLlama model: `ollama pull codellama` (recommended for code generation)
+3. Set `USE_OLLAMA=true` and `OLLAMA_MODEL=codellama` in backend `.env`
 4. Restart the backend server
 5. Test the AI features!
+
+**Note**: The system now defaults to **DeepSeek Coder 6.7B** for best code generation accuracy. Make sure to pull the model:
+```bash
+ollama pull deepseek-coder:6.7b
+```
+
+See `BEST_AI_MODELS.md` for detailed model recommendations and comparisons.
 
 Enjoy using Ollama for AI-powered development! 🚀
 
